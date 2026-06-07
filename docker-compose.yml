@@ -7,26 +7,34 @@ services:
       dockerfile: Dockerfile
     container_name: avry-payments
     ports:
-      - "3030:3030"
+      - "8085:8085"
     environment:
-      # Database
-      DATABASE_URL: ${DATABASE_URL}
-      
-      # Service
-      PORT: 3030
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      
-      # JWT
-      JWT_SECRET: ${JWT_SECRET}
-      
-      # API Keys (as needed)
-      # API_KEY: ${API_KEY}
-    
+      - PORT=8085
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - DATABASE_URL=${DATABASE_URL}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - JWT_SECRET=${JWT_SECRET}
+      - MIDTRANS_SERVER_KEY=${MIDTRANS_SERVER_KEY}
+      - MIDTRANS_CLIENT_KEY=${MIDTRANS_CLIENT_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
     restart: unless-stopped
-    
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3030/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - aivory-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.avry-payments.rule=Host(`backend.aivory.id`) && PathPrefix(`/payments`)"
+      - "traefik.http.routers.avry-payments.entrypoints=websecure"
+      - "traefik.http.routers.avry-payments.tls.certresolver=letsencrypt"
+      - "traefik.http.services.avry-payments.loadbalancer.server.port=8085"
+
+networks:
+  aivory-network:
+    name: aivory-network
+    external: true
