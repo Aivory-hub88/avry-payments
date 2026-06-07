@@ -1,0 +1,13 @@
+{
+  "wallet_id": "wallet_cvvbfch064g5",
+  "user_id": "user_3bb66dc5440740d2",
+  "balance": 50.0,
+  "total_topup": 50.0,
+  "total_spent": 0.0,
+  "total_refunded": 0.0,
+  "currency": "USD",
+  "is_active": true,
+  "created_at": "2026-06-05T06:31:22.824908",
+  "updated_at": "2026-06-05T06:31:39.678466",
+  "last_transaction_at": "2026-06-05T06:31:39.678464"
+}

@@ -1,0 +1,14 @@
+{
+  "card_id": "card_nsafnpc9zmq6",
+  "user_id": "user_3bb66dc5440740d2",
+  "token": "card_token_c7v32oqd5xeg",
+  "brand": "4",
+  "last_four": "1111",
+  "holder_name": "Test User",
+  "expiry_month": 12,
+  "expiry_year": 2025,
+  "is_default": true,
+  "is_active": true,
+  "created_at": "2026-06-05T06:31:45.867699",
+  "updated_at": "2026-06-05T06:31:45.867704"
+}

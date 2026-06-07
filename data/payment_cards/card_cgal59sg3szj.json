@@ -1,0 +1,14 @@
+{
+  "card_id": "card_cgal59sg3szj",
+  "user_id": "user_70e072212169449d",
+  "token": "card_token_9a7jn5y8uvd1",
+  "brand": "5",
+  "last_four": "4444",
+  "holder_name": "Test User",
+  "expiry_month": 6,
+  "expiry_year": 2026,
+  "is_default": false,
+  "is_active": true,
+  "created_at": "2026-06-05T06:34:37.943217",
+  "updated_at": "2026-06-05T06:34:37.943221"
+}

@@ -1,0 +1,13 @@
+{
+  "wallet_id": "wallet_3j953fzvm20t",
+  "user_id": "user_70e072212169449d",
+  "balance": 50.0,
+  "total_topup": 50.0,
+  "total_spent": 0.0,
+  "total_refunded": 0.0,
+  "currency": "USD",
+  "is_active": true,
+  "created_at": "2026-06-05T06:34:19.371185",
+  "updated_at": "2026-06-05T06:34:29.672444",
+  "last_transaction_at": "2026-06-05T06:34:29.672443"
+}

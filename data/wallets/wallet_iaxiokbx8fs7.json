@@ -1,0 +1,13 @@
+{
+  "wallet_id": "wallet_iaxiokbx8fs7",
+  "user_id": "test_user_123",
+  "balance": 0.0,
+  "total_topup": 0.0,
+  "total_spent": 0.0,
+  "total_refunded": 0.0,
+  "currency": "USD",
+  "is_active": true,
+  "created_at": "2026-06-05T06:19:15.386782",
+  "updated_at": "2026-06-05T06:19:15.386785",
+  "last_transaction_at": null
+}

@@ -1,0 +1,13 @@
+{
+  "wallet_id": "wallet_wddagaixp55k",
+  "user_id": "user_125f34560cfc4a96",
+  "balance": 50.0,
+  "total_topup": 50.0,
+  "total_spent": 0.0,
+  "total_refunded": 0.0,
+  "currency": "USD",
+  "is_active": true,
+  "created_at": "2026-06-05T06:27:48.887203",
+  "updated_at": "2026-06-05T06:27:53.048896",
+  "last_transaction_at": "2026-06-05T06:27:53.048895"
+}

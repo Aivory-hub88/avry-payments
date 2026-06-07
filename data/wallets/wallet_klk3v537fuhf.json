@@ -1,0 +1,13 @@
+{
+  "wallet_id": "wallet_klk3v537fuhf",
+  "user_id": "user_46ce726d8c5a4150",
+  "balance": 0.0,
+  "total_topup": 0.0,
+  "total_spent": 0.0,
+  "total_refunded": 0.0,
+  "currency": "USD",
+  "is_active": true,
+  "created_at": "2026-06-05T05:57:34.031392",
+  "updated_at": "2026-06-05T05:57:34.031395",
+  "last_transaction_at": null
+}

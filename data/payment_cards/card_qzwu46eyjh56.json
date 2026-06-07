@@ -1,0 +1,14 @@
+{
+  "card_id": "card_qzwu46eyjh56",
+  "user_id": "user_bcd2014ab9cb4088",
+  "token": "card_token_8ikvccg9snd4",
+  "brand": "5",
+  "last_four": "4444",
+  "holder_name": "User",
+  "expiry_month": 6,
+  "expiry_year": 2026,
+  "is_default": false,
+  "is_active": true,
+  "created_at": "2026-06-05T06:36:37.664335",
+  "updated_at": "2026-06-05T06:36:37.664342"
+}

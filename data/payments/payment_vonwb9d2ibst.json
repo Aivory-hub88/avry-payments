@@ -1,0 +1,13 @@
+{
+  "payment_id": "payment_vonwb9d2ibst",
+  "order_id": "payment_ai_snapshot_4ilw20g3t5jp",
+  "user_id": "user_8881fa1204924c14",
+  "product": "ai_snapshot",
+  "amount": 29.0,
+  "status": "pending",
+  "payment_method": "midtrans",
+  "is_mock": true,
+  "transaction_id": "mock_txn_payment_ai_snapshot_4ilw20g3t5jp",
+  "created_at": "2026-06-05T06:41:01.377222",
+  "updated_at": "2026-06-05T06:41:01.377237"
+}

@@ -1,0 +1,13 @@
+{
+  "payment_id": "payment_gnafiqmu717q",
+  "order_id": "payment_foundation_vduswkiv813y",
+  "user_id": "user_79245e6b676f4478",
+  "product": "foundation",
+  "amount": 99.0,
+  "status": "pending",
+  "payment_method": "midtrans",
+  "is_mock": true,
+  "transaction_id": "mock_txn_payment_foundation_vduswkiv813y",
+  "created_at": "2026-06-05T06:21:24.134368",
+  "updated_at": "2026-06-05T06:21:24.134382"
+}

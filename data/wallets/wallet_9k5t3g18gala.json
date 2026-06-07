@@ -1,0 +1,13 @@
+{
+  "wallet_id": "wallet_9k5t3g18gala",
+  "user_id": "user_62b9f96494fc4b1c",
+  "balance": 50.0,
+  "total_topup": 50.0,
+  "total_spent": 0.0,
+  "total_refunded": 0.0,
+  "currency": "USD",
+  "is_active": true,
+  "created_at": "2026-06-05T06:39:17.893001",
+  "updated_at": "2026-06-05T06:39:28.187289",
+  "last_transaction_at": "2026-06-05T06:39:28.187287"
+}

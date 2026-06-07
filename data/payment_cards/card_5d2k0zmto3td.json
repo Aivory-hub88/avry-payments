@@ -1,0 +1,14 @@
+{
+  "card_id": "card_5d2k0zmto3td",
+  "user_id": "user_32257b16ec14404b",
+  "token": "card_token_3fuz331ur1x0",
+  "brand": "5",
+  "last_four": "4444",
+  "holder_name": "User",
+  "expiry_month": 6,
+  "expiry_year": 2026,
+  "is_default": false,
+  "is_active": true,
+  "created_at": "2026-06-05T07:02:54.704532",
+  "updated_at": "2026-06-05T07:02:54.704538"
+}

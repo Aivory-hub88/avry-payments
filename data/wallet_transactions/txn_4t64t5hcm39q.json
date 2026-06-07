@@ -1,0 +1,17 @@
+{
+  "transaction_id": "txn_4t64t5hcm39q",
+  "user_id": "user_e975284eba764701",
+  "type": "topup",
+  "amount": 50.0,
+  "balance_before": 0.0,
+  "balance_after": 50.0,
+  "description": "Wallet topup via Midtrans",
+  "reference_id": "topup_8anv23c5suns",
+  "status": "completed",
+  "created_at": "2026-06-05T07:07:47.595793",
+  "updated_at": "2026-06-05T07:07:47.595796",
+  "metadata": {
+    "order_id": "topup_8anv23c5suns",
+    "payment_method": "midtrans"
+  }
+}

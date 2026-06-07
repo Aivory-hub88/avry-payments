@@ -1,0 +1,13 @@
+{
+  "payment_id": "payment_rfs5quydppfi",
+  "order_id": "topup_hesxiboldoft",
+  "user_id": "user_bcd2014ab9cb4088",
+  "product": "wallet_topup",
+  "amount": 50.0,
+  "status": "completed",
+  "payment_method": "midtrans",
+  "is_mock": true,
+  "transaction_id": "mock_txn_payment_wallet_topup_50.0_q1l6q3bxrm9q",
+  "created_at": "2026-06-05T06:36:27.366108",
+  "updated_at": "2026-06-05T06:36:29.437076"
+}

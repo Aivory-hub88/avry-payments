@@ -1,0 +1,13 @@
+{
+  "payment_id": "payment_kmsk6gf6r2yx",
+  "order_id": "topup_gzsrfkeievdg",
+  "user_id": "user_38a53dd7c87d414b",
+  "product": "wallet_topup",
+  "amount": 50.0,
+  "status": "completed",
+  "payment_method": "midtrans",
+  "is_mock": true,
+  "transaction_id": "mock_txn_payment_wallet_topup_50.0_z7690ngnp3ic",
+  "created_at": "2026-06-05T07:05:23.383719",
+  "updated_at": "2026-06-05T07:05:25.475368"
+}
