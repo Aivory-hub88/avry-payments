@@ -23,7 +23,7 @@ class MidtransConfig:
         self.client_key = settings.midtrans_client_key
         self.is_production = settings.midtrans_is_production
         self.api_url = "https://api.sandbox.midtrans.com" if not self.is_production else "https://api.midtrans.com"
-        self.snap_url = "https://snap.sandbox.midtrans.com" if not self.is_production else "https://snap.midtrans.com"
+        self.snap_url = "https://app.sandbox.midtrans.com" if not self.is_production else "https://app.midtrans.com"
     
     @staticmethod
     def convert_usd_to_idr(usd_amount: float) -> int:
@@ -89,9 +89,9 @@ class MidtransPaymentService:
         }
     
     def _encode_basic_auth(self) -> str:
-        """Encode server key for Basic Auth."""
+        """Encode server key for Basic Auth (ServerKey: format per Midtrans docs)."""
         import base64
-        return base64.b64encode(self.server_key.encode()).decode() if self.server_key else ""
+        return base64.b64encode(f"{self.server_key}:".encode()).decode() if self.server_key else ""
     
     async def create_transaction(
         self,
@@ -129,12 +129,12 @@ class MidtransPaymentService:
                 "order_id": order_id,
                 "gross_amount": amount_idr,
             },
-            "item_details": {
+            "item_details": [{
                 "id": product,
                 "price": amount_idr,
                 "quantity": 1,
                 "name": self._get_product_name(product),
-            },
+            }],
             "customer_details": customer_details or {
                 "first_name": "User",
                 "email": f"{user_id}@aivory.id",
@@ -166,7 +166,7 @@ class MidtransPaymentService:
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.api_url}/v2/snap/transactions",
+                    f"{self.snap_url}/snap/v1/transactions",
                     json=transaction_data,
                     headers=self._get_headers(),
                 )
