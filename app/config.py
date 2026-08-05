@@ -38,15 +38,107 @@ class Settings(BaseSettings):
     midtrans_server_key: Optional[str] = None
     midtrans_client_key: Optional[str] = None
     midtrans_is_production: bool = False
-    
+    # USD -> IDR conversion for Midtrans gross_amount. The live market rate is
+    # fetched at runtime (see app/services/fx.py) and `fx_margin_percent` is
+    # added on top; `usd_idr_rate` is only the static fallback used when the
+    # provider is unreachable and no cached rate exists.
+    usd_idr_rate: int = 16300
+    fx_rate_url: str = "https://open.er-api.com/v6/latest/USD"
+    fx_margin_percent: float = 1.0
+    fx_ttl_seconds: int = 2 * 60 * 60
+    # The background poller refreshes on this interval regardless of traffic, so
+    # pricing is current even with no payments that day. Note the default
+    # provider only publishes once per ~24h — see app/services/fx.py.
+    fx_poll_seconds: int = 2 * 60 * 60
+    # Where Snap sends the customer once they finish/cancel.
+    # Note the doubled segment: the dashboard runs with Next.js basePath
+    # "/dashboard" *and* has an app/dashboard route, so the single-segment
+    # form 404s and would land paying customers on a dead page.
+    payment_finish_redirect_url: str = (
+        "https://dashboard.aivory.id/dashboard/dashboard/payments"
+    )
+    # How long a Snap payment link stays valid, in hours.
+    payment_expiry_hours: int = 24
+
+    # Trusted server-to-server token for calling avry-backend's internal APIs
+    # (used to apply entitlements once a payment is verified).
+    internal_service_token: Optional[str] = None
+    avry_backend_url: str = "http://avry-backend:8081"
+
+    # Notifications. All optional: a missing channel is skipped, never fatal —
+    # a receipt that can't be sent must not undo a payment that succeeded.
+    smtp_host: Optional[str] = None
+    smtp_port: int = 587
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
+    # Preferred sender for billing mail. The platform's shared SMTP identity is
+    # careers@, which is the wrong From: for a receipt.
+    payments_from_email: Optional[str] = None
+    # Admin alerting over the existing Telegram bot.
+    telegram_bot_token: Optional[str] = None
+    admin_telegram_chat_id: Optional[str] = None
+
+
     # n8n Integration configuration
     n8n_base_url: str = "http://43.156.108.96:5678"
     n8n_timeout: float = 10.0
     n8n_max_retries: int = 3
     
-    # CORS configuration
-    cors_origins: list[str] = ["*"]
-    
+    # CORS configuration. A payment API is called with credentials, so "*" is
+    # both unsafe and rejected by browsers alongside allow_credentials.
+    cors_origins: list[str] = [
+        "https://aivory.id",
+        "https://www.aivory.id",
+        "https://dashboard.aivory.id",
+        "https://admin.aivory.id",
+        "https://console.aivory.id",
+        "https://api.aivory.id",
+        "https://aivory.uk",
+        "https://www.aivory.uk",
+    ]
+
+    def validate_midtrans_config(self) -> None:
+        """
+        Fail fast on a Midtrans configuration that cannot transact.
+
+        The dangerous case is a *silent* mismatch: production keys pointed at
+        the sandbox host (or vice versa) authenticate against nothing, so every
+        real payment 401s. Midtrans prefixes sandbox keys with "SB-", which
+        makes the intended environment inferable from the key itself.
+        """
+        if not self.midtrans_server_key or not self.midtrans_client_key:
+            if self.midtrans_is_production:
+                raise ValueError(
+                    "MIDTRANS_IS_PRODUCTION=true but MIDTRANS_SERVER_KEY/"
+                    "MIDTRANS_CLIENT_KEY are missing. Refusing to start in "
+                    "production with payments in mock mode."
+                )
+            return
+
+        server_is_sandbox = self.midtrans_server_key.startswith("SB-")
+        client_is_sandbox = self.midtrans_client_key.startswith("SB-")
+
+        if server_is_sandbox != client_is_sandbox:
+            raise ValueError(
+                "Midtrans key pair mismatch: one key is a sandbox (SB-) key and "
+                "the other is a production key. Use a matching pair."
+            )
+
+        if self.midtrans_is_production and server_is_sandbox:
+            raise ValueError(
+                "MIDTRANS_IS_PRODUCTION=true but the configured keys are "
+                "sandbox (SB-) keys. Set production keys or turn the flag off."
+            )
+
+        if not self.midtrans_is_production and not server_is_sandbox:
+            raise ValueError(
+                "Production Midtrans keys are configured but "
+                "MIDTRANS_IS_PRODUCTION is false, so the service would call "
+                "api.sandbox.midtrans.com with production credentials and every "
+                "payment would fail. Set MIDTRANS_IS_PRODUCTION=true."
+            )
+
     def validate_paid_tier_config(self) -> None:
         """
         Validate that required configuration for paid tiers is present.

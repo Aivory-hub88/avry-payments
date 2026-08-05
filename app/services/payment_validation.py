@@ -137,22 +137,28 @@ class PaymentValidationService:
         try:
             from app.utils.id_generator import generate_id
             
+            from app.database import payment_repo
+            from app.services import fx
+
             payment_id = generate_id("payment")
-            payment_record = {
+            # A manual record has no Midtrans order, so synthesise a stable id:
+            # the ledger is keyed on order_id and it must stay unique.
+            resolved_order_id = order_id or f"manual_{payment_id}"
+
+            rate = fx.current_rate()
+            payment_repo.create({
                 "payment_id": payment_id,
+                "order_id": resolved_order_id,
                 "user_id": user_id,
                 "product": product,
                 "amount": amount,
+                "amount_idr": int(round(amount * rate)),
+                "usd_idr_rate": rate,
+                # Recorded as already settled: an admin only books a payment that
+                # actually happened outside the gateway (bank transfer, cash).
                 "status": "paid",
                 "payment_method": payment_method,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-            
-            if order_id:
-                payment_record["order_id"] = order_id
-            
-            db.save_json("payments", payment_id, payment_record)
+            })
             return True
             
         except Exception as e:
@@ -174,12 +180,13 @@ class PaymentValidationService:
         Returns:
             True if payment completed
         """
-        payments = db.load_all_json("payments")
+        from app.database import payment_repo
+
+        rows, _ = payment_repo.query(user_id=user_id, status="paid", limit=500)
         return any(
-            p.get("user_id") == user_id 
-            and (p.get("product") == product or (product in ["ai_snapshot", "ai_blueprint"] and p.get("product") == "ai_bundle"))
-            and p.get("status") == "paid"
-            for p in payments
+            p.get("product") == product
+            or (product in ["ai_snapshot", "ai_blueprint"] and p.get("product") == "ai_bundle")
+            for p in rows
         )
     
     async def validate_access(

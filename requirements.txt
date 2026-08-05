@@ -24,3 +24,5 @@ python-dotenv==1.0.0
 # Payment gateway
 midtransclient==1.3.0
 
+# Email (payment receipts)
+aiosmtplib==3.0.1

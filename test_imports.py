@@ -23,7 +23,7 @@ def test_imports():
         ("app.models.snapshot", lambda: __import__('app.models.snapshot')),
         ("app.database.db_service", lambda: __import__('app.database.db_service')),
         ("app.config", lambda: __import__('app.config')),
-        ("midtrans_config", lambda: __import__('midtrans_config')),
+        ("app.services.pricing", lambda: __import__("app.services.pricing")),
     ]
     
     passed = 0

@@ -99,6 +99,29 @@ async def require_auth(authorization: Optional[str] = Header(None)) -> dict:
     return payload
 
 
+def caller_user_id(payload: dict) -> Optional[str]:
+    """The authenticated caller's user id, across token shapes."""
+    return payload.get("user_id") or payload.get("sub")
+
+
+def is_admin(payload: dict) -> bool:
+    """Whether the caller may act on other users' data."""
+    return _account_type(payload) in ADMIN_ACCOUNT_TYPES
+
+
+def require_self_or_admin(payload: dict, user_id: Optional[str]) -> None:
+    """
+    Reject a caller reaching for someone else's money.
+
+    Used by every user-scoped wallet and payment route: a path parameter naming a
+    user is a request, not an authorisation.
+    """
+    if is_admin(payload):
+        return
+    if not user_id or caller_user_id(payload) != user_id:
+        raise HTTPException(status_code=403, detail="Not permitted for this user")
+
+
 async def require_admin(payload: dict = Depends(require_auth)) -> dict:
     """
     FastAPI dependency: require an admin/superadmin caller.
