@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     # Preferred sender for billing mail. The platform's shared SMTP identity is
     # careers@, which is the wrong From: for a receipt.
     payments_from_email: Optional[str] = None
+
+    # Receipts are delivered by the n8n workflow "Aivory - Payment Receipt
+    # Email" rather than by this service's own SMTP client, so the template can
+    # be edited without redeploying a service that moves money, and every send
+    # is visible in n8n's execution list. The token is the only thing guarding
+    # that public webhook. With either unset, delivery falls back to SMTP.
+    n8n_receipt_webhook_url: Optional[str] = None
+    receipt_email_token: Optional[str] = None
     # Admin alerting over the existing Telegram bot.
     telegram_bot_token: Optional[str] = None
     admin_telegram_chat_id: Optional[str] = None

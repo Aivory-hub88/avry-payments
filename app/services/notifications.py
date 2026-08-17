@@ -272,29 +272,84 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
 
     # Email receipt to the customer
     if email:
-        invoice_number = record_.get("invoice_number") or order_id
-        receipt_url = settings.payment_finish_redirect_url
-        await _send_email(
-            to_address=email,
-            subject=f"Your Aivory receipt — {label} ({invoice_number})",
-            html=_receipt_html(label, amount_usd, amount_idr, order_id, record_, receipt_url),
-            text=(
-                f"Thank you for your purchase.\n\n"
-                f"{label}\n"
-                f"Amount: {_format_idr(amount_idr)} (${amount_usd:.2f})\n"
-                f"Invoice: {invoice_number}\n"
-                f"Order: {order_id}\n\n"
-                f"Your access is now active.\n"
-                f"Download a PDF receipt: {receipt_url}\n\n"
-                f"— Aivory AI"
-            ),
-        )
+        await _send_receipt(email, label, amount_usd, amount_idr, order_id, record_)
 
     # Admin Telegram ping
     await _telegram_admin(
         f"💰 <b>Payment received</b>\n{label}\n"
         f"{_format_idr(amount_idr)} (${amount_usd:.2f})\n"
         f"{email or user_id}\nOrder: <code>{order_id}</code>"
+    )
+
+
+async def _send_receipt(
+    email: str,
+    label: str,
+    amount_usd: float,
+    amount_idr: Any,
+    order_id: str,
+    record_: Dict[str, Any],
+) -> bool:
+    """
+    Deliver the receipt through the n8n workflow, falling back to SMTP.
+
+    Only structured fields are posted — n8n owns the template, the same split
+    the free-assessment report email already uses. Never raises: a receipt that
+    cannot be delivered must not unsettle a payment that already succeeded.
+    """
+    invoice_number = record_.get("invoice_number") or order_id
+    receipt_url = settings.payment_finish_redirect_url
+
+    webhook = settings.n8n_receipt_webhook_url
+    token = settings.receipt_email_token
+    if webhook and token:
+        payload = {
+            "token": token,
+            "email": email,
+            "invoice_number": invoice_number,
+            "order_id": order_id,
+            "product_label": label,
+            "payment_method": record_.get("payment_type") or "midtrans",
+            "amount_idr_formatted": _format_idr(amount_idr),
+            "amount_usd": amount_usd,
+            "paid_at": str(record_.get("created_at") or ""),
+            "receipt_url": receipt_url,
+        }
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(webhook, json=payload)
+            if response.status_code == 200:
+                logger.info("Receipt queued via n8n for %s (order %s)", email, order_id)
+                return True
+            # A 4xx here means the workflow rejected our payload — a token
+            # mismatch or a malformed field. Log the status so it is diagnosable
+            # without dumping the token into the logs.
+            logger.warning(
+                "n8n rejected the receipt for order %s (HTTP %s); falling back to SMTP",
+                order_id, response.status_code,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not reach the n8n receipt workflow for order %s (%s); falling back to SMTP",
+                order_id, e,
+            )
+
+    return await _send_email(
+        to_address=email,
+        subject=f"Your Aivory receipt — {label} ({invoice_number})",
+        html=_receipt_html(label, amount_usd, amount_idr, order_id, record_, receipt_url),
+        text=(
+            f"Thank you for your purchase.\n\n"
+            f"{label}\n"
+            f"Amount: {_format_idr(amount_idr)} (${amount_usd:.2f})\n"
+            f"Invoice: {invoice_number}\n"
+            f"Order: {order_id}\n\n"
+            f"Your access is now active.\n"
+            f"Download a PDF receipt: {receipt_url}\n\n"
+            f"— Aivory AI"
+        ),
     )
 
 
