@@ -26,3 +26,6 @@ midtransclient==1.3.0
 
 # Email (payment receipts)
 aiosmtplib==3.0.1
+
+# Receipt PDFs (pure Python, no system libraries)
+fpdf2==2.7.9

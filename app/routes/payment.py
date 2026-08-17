@@ -18,13 +18,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app.auth import require_admin, require_auth
 from app.config import settings
 from app.database import payment_repo
-from app.services import fx, pricing
+from app.services import fx, pricing, receipt_pdf
 from app.services.payment_gateway import midtrans_service
 from app.services.payment_validation import PaymentValidationService
 from app.utils.id_generator import generate_id
@@ -239,6 +239,42 @@ async def create_midtrans_transaction(
         })
 
     return CreateTransactionResponse(**result)
+
+
+@router.get("/receipt/{order_id}")
+async def download_receipt(order_id: str, sig: str = ""):
+    """
+    Return the receipt PDF for one order.
+
+    Deliberately unauthenticated: this is the link inside the receipt email, and
+    requiring a session would send customers to a login screen to read a
+    document that is already theirs. The HMAC in `sig` is what authorises it --
+    it is per-order and unguessable, so possession of the emailed link is the
+    proof, exactly as it is for a password-reset URL.
+
+    A wrong or missing signature is a flat 404 rather than a 403: telling an
+    enumerator that an order exists but their signature is wrong is more than
+    they need to know.
+    """
+    if not receipt_pdf.signature_valid(order_id, sig):
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
+    record = payment_repo.find_by_order_id(order_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
+    label = pricing.product_name(record.get("product") or "")
+    pdf = receipt_pdf.render(record, label)
+    if pdf is None:
+        raise HTTPException(status_code=503, detail="Receipt rendering unavailable")
+
+    invoice = record.get("invoice_number") or order_id
+    filename = f"Aivory-receipt-{invoice}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/midtrans/status/{order_id}", response_model=TransactionStatusResponse)

@@ -298,7 +298,11 @@ async def _send_receipt(
     cannot be delivered must not unsettle a payment that already succeeded.
     """
     invoice_number = record_.get("invoice_number") or order_id
-    receipt_url = settings.payment_finish_redirect_url
+    # Link straight at the PDF instead of the dashboard's payments page: the
+    # customer wanted their receipt, not a login screen in front of it.
+    from app.services import receipt_pdf
+
+    receipt_url = receipt_pdf.download_url_for(order_id)
 
     webhook = settings.n8n_receipt_webhook_url
     token = settings.receipt_email_token

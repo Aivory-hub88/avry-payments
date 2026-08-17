@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     # that public webhook. With either unset, delivery falls back to SMTP.
     n8n_receipt_webhook_url: Optional[str] = None
     receipt_email_token: Optional[str] = None
+
+    # Public origin this service is reachable on, used to build the signed
+    # receipt-download link that goes into the receipt email. It has to be the
+    # externally routable host, not the container name, because the customer's
+    # mail client is what follows it.
+    payments_public_base_url: str = "https://api.aivory.id/payments"
     # Admin alerting over the existing Telegram bot.
     telegram_bot_token: Optional[str] = None
     admin_telegram_chat_id: Optional[str] = None
