@@ -16,7 +16,7 @@ Authorisation rules
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -81,6 +81,11 @@ class CreateTransactionRequest(BaseModel):
     customer_first_name: Optional[str] = Field(None, description="Customer first name")
     custom_field1: Optional[str] = Field(None, description="Custom field 1")
     custom_field2: Optional[str] = Field(None, description="Custom field 2")
+    enabled_payments: Optional[List[str]] = Field(
+        None,
+        description="Restrict the Snap channel list to the one the customer picked. "
+                    "Validated against the gateway allowlist; unknown values are ignored.",
+    )
 
 
 class CreateTransactionResponse(BaseModel):
@@ -211,6 +216,7 @@ async def create_midtrans_transaction(
         customer_details=customer_details,
         custom_field1=request.custom_field1,
         custom_field2=request.custom_field2,
+        enabled_payments=request.enabled_payments,
     )
 
     if result.get("success"):

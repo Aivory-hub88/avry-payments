@@ -21,7 +21,7 @@ import base64
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -159,6 +159,15 @@ class MidtransPaymentService:
             return False
         return True
 
+    # Snap channel identifiers this merchant account accepts, verified by
+    # issuing a real token against each one. A request naming anything else is
+    # not forwarded: Midtrans rejects the whole transaction on an unrecognised
+    # channel, so a stale frontend would break checkout outright instead of
+    # merely falling back to the full channel list.
+    SUPPORTED_SNAP_CHANNELS = frozenset(
+        {"credit_card", "gopay", "dana", "qris", "shopeepay"}
+    )
+
     # ------------------------------------------------------------------
     # Transaction creation
     # ------------------------------------------------------------------
@@ -170,6 +179,7 @@ class MidtransPaymentService:
         customer_details: Optional[Dict[str, Any]] = None,
         custom_field1: Optional[str] = None,
         custom_field2: Optional[str] = None,
+        enabled_payments: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Create a Snap transaction for `product`.
@@ -206,6 +216,19 @@ class MidtransPaymentService:
             },
             "credit_card": {"secure": True},
         }
+
+        # Honour the channel the customer already chose on our own page, so
+        # Snap opens on it instead of asking them to pick a second time.
+        # Unknown values are dropped rather than forwarded; an empty result
+        # means no restriction, which is Snap's default of showing everything.
+        requested = [c for c in (enabled_payments or []) if c in self.SUPPORTED_SNAP_CHANNELS]
+        if requested:
+            transaction_data["enabled_payments"] = requested
+        elif enabled_payments:
+            logger.warning(
+                "Ignoring unsupported enabled_payments %s; showing all channels",
+                enabled_payments,
+            )
 
         if custom_field1:
             transaction_data["custom_field1"] = custom_field1
