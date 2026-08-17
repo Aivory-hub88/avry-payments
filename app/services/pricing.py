@@ -41,18 +41,29 @@ FIXED_PRICES_USD: Dict[str, int] = {
 
 # Credit top-up packs, in USD, keyed by the credits granted.
 #
-# The four packs the dashboard has always advertised (100/$10, 500/$45,
-# 1000/$85, 5000/$400) are the anchors; the rest sit on the same declining
-# per-credit curve ($0.11 down to $0.075).
+# These are the prices the dashboard's credit marketplace puts in front of the
+# customer, charged with no markup on top. They previously sat 17-36% above the
+# advertised figures, so anyone buying 10,000 credits saw $550 and would have
+# been charged $750. The comment that used to live here claimed 100/$10,
+# 500/$45, 1000/$85 and 5000/$400 were "what the dashboard has always
+# advertised" -- it was stale, and the mismatch went unnoticed because the
+# dashboard's purchase button was still a mock alert.
+#
+# Keep this table and `creditPackages` in the dashboard's SettingsModal.tsx in
+# step: the server prices every order from here (no amount is accepted from the
+# browser), so a divergence is charged silently rather than rejected.
+#
+# The curve still declines with volume: $0.100/credit at the smallest pack down
+# to $0.055 at the largest.
 CREDIT_PACKS_USD: Dict[int, int] = {
-    50: 6,        # $0.120/credit
-    100: 10,      # $0.100/credit  (anchor)
-    250: 24,      # $0.096/credit
-    500: 45,      # $0.090/credit  (anchor)
-    1000: 85,     # $0.085/credit  (anchor)
-    2500: 205,    # $0.082/credit
-    5000: 400,    # $0.080/credit  (anchor)
-    10000: 750,   # $0.075/credit
+    50: 5,        # $0.100/credit
+    100: 9,       # $0.090/credit
+    250: 20,      # $0.080/credit
+    500: 38,      # $0.076/credit
+    1000: 70,     # $0.070/credit
+    2500: 165,    # $0.066/credit
+    5000: 300,    # $0.060/credit
+    10000: 550,   # $0.055/credit
 }
 
 # Legacy/alternate ids the frontend has used for the same products.

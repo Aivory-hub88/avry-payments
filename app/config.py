@@ -54,8 +54,14 @@ class Settings(BaseSettings):
     # Note the doubled segment: the dashboard runs with Next.js basePath
     # "/dashboard" *and* has an app/dashboard route, so the single-segment
     # form 404s and would land paying customers on a dead page.
+    # aivory.uk, not the legacy dashboard.aivory.id, which 301s here anyway.
+    # This value is both Midtrans' finish redirect and the receipt email's CTA.
+    # For the email an extra hop is only untidy; for Midtrans it is a real risk,
+    # because mobile e-wallet flows return through a deep link and a redirect
+    # chain is where query parameters get dropped. It also keeps the money path
+    # off a domain that is being retired.
     payment_finish_redirect_url: str = (
-        "https://dashboard.aivory.id/dashboard/dashboard/payments"
+        "https://aivory.uk/dashboard/dashboard/payments"
     )
     # How long a Snap payment link stays valid, in hours.
     payment_expiry_hours: int = 24
