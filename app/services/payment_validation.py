@@ -20,8 +20,8 @@ class PaymentValidationService:
     BLUEPRINT_PRICE = 249  # $249 for Transformation Blueprint
     SNAPSHOT_PRICE = 79  # $79 for Business Operations Assessment
     FULL_STACK_PRICE = 299  # $299 for Complete Transformation Package
-    FOUNDATION_PRICE = 200  # $200 for Foundation tier
-    PRO_PRICE = 500  # $500 for Pro tier
+    FOUNDATION_PRICE = 39  # $39 for Operational tier
+    PRO_PRICE = 99  # $99 for Business tier
     ENTERPRISE_PRICE = 1000  # $1000 for Enterprise tier
     
     # Credit prices

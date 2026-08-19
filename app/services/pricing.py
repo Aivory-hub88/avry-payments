@@ -34,8 +34,8 @@ FIXED_PRICES_USD: Dict[str, int] = {
     # Package. The dashboard and the settings modal have advertised this
     # bundle since launch; it was not sellable, so every click on it 400'd.
     "ai_fullstack": 299,
-    "foundation": 20,
-    "acceleration": 44,
+    "foundation": 39,
+    "acceleration": 99,
     "intelligence": 499,
 }
 
@@ -89,8 +89,8 @@ PRODUCT_NAMES: Dict[str, str] = {
     "ai_snapshot": "Business Operations Assessment",
     "ai_blueprint": "Transformation Blueprint",
     "ai_fullstack": "Complete Transformation Package",
-    "foundation": "Foundation Plan",
-    "acceleration": "Acceleration Plan",
+    "foundation": "Operational Plan",
+    "acceleration": "Business Plan",
     "intelligence": "Intelligence Plan",
 }
 
