@@ -28,12 +28,12 @@ class UnknownProduct(ValueError):
 # Mirrors the pricing page (foundation $20, acceleration/pro $44,
 # intelligence/enterprise $499).
 FIXED_PRICES_USD: Dict[str, int] = {
-    "ai_snapshot": 29,
-    "ai_blueprint": 85,
-    # Snapshot + Blueprint together, $15 cheaper than buying both. The dashboard
-    # and the settings modal have advertised this bundle since launch; it was not
-    # sellable, so every click on it 400'd.
-    "ai_fullstack": 99,
+    "ai_snapshot": 79,
+    "ai_blueprint": 249,
+    # Snapshot + Blueprint + Roadmap together as the Complete Transformation
+    # Package. The dashboard and the settings modal have advertised this
+    # bundle since launch; it was not sellable, so every click on it 400'd.
+    "ai_fullstack": 299,
     "foundation": 20,
     "acceleration": 44,
     "intelligence": 499,
@@ -86,9 +86,9 @@ WALLET_TOPUP_MAX_USD = 1000
 MIN_GROSS_AMOUNT_IDR = 1000
 
 PRODUCT_NAMES: Dict[str, str] = {
-    "ai_snapshot": "AI Snapshot",
-    "ai_blueprint": "AI System Blueprint",
-    "ai_fullstack": "Full Stack Bundle",
+    "ai_snapshot": "Business Operations Assessment",
+    "ai_blueprint": "Transformation Blueprint",
+    "ai_fullstack": "Complete Transformation Package",
     "foundation": "Foundation Plan",
     "acceleration": "Acceleration Plan",
     "intelligence": "Intelligence Plan",

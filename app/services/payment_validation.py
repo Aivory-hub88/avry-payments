@@ -17,8 +17,9 @@ class PaymentValidationService:
     """
     
     # Product prices
-    BLUEPRINT_PRICE = 85  # $85 for Blueprint tier
-    SNAPSHOT_PRICE = 29  # $29 for Snapshot tier
+    BLUEPRINT_PRICE = 249  # $249 for Transformation Blueprint
+    SNAPSHOT_PRICE = 79  # $79 for Business Operations Assessment
+    FULL_STACK_PRICE = 299  # $299 for Complete Transformation Package
     FOUNDATION_PRICE = 200  # $200 for Foundation tier
     PRO_PRICE = 500  # $500 for Pro tier
     ENTERPRISE_PRICE = 1000  # $1000 for Enterprise tier
@@ -232,7 +233,7 @@ class PaymentValidationService:
             )
         
         # Check for one-time products
-        if product in ["ai_snapshot", "ai_blueprint"]:
+        if product in ["ai_snapshot", "ai_blueprint", "ai_fullstack"]:
             return await self._validate_one_time_product(user_id, product)
         
         # Check for credits
@@ -265,7 +266,7 @@ class PaymentValidationService:
                 payment_required=False
             )
         
-        price = self.SNAPSHOT_PRICE if product == "ai_snapshot" else self.BLUEPRINT_PRICE
+        price = self._get_price(product)
         return ValidationResult(
             allowed=False,
             bypass=False,
@@ -306,6 +307,7 @@ class PaymentValidationService:
         prices = {
             "ai_snapshot": self.SNAPSHOT_PRICE,
             "ai_blueprint": self.BLUEPRINT_PRICE,
+            "ai_fullstack": self.FULL_STACK_PRICE,
             "foundation": self.FOUNDATION_PRICE,
             "pro": self.PRO_PRICE,
             "enterprise": self.ENTERPRISE_PRICE,
