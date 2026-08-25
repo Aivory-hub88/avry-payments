@@ -210,17 +210,21 @@ async def _admin_alert_email(
     amount_usd: float,
     amount_idr: Any,
     order_id: str,
-    buyer: str,
+    user_id: str,
+    email: Optional[str],
     payment_type: Optional[str],
 ) -> None:
     """Email the fixed admin list that a payment came in. Never raises."""
     subject = f"Payment received — {label} ({_format_idr(amount_idr)})"
     method = payment_type or "midtrans"
+    user_id_display = user_id or "unknown user"
+    email_display = email or "no email on file"
     text = (
         f"Aivory received a payment.\n\n"
-        f"{label}\n"
+        f"Item: {label}\n"
         f"Amount: {_format_idr(amount_idr)} (${amount_usd:.2f})\n"
-        f"Buyer: {buyer}\n"
+        f"User ID: {user_id_display}\n"
+        f"Email: {email_display}\n"
         f"Method: {method}\n"
         f"Order: {order_id}\n"
     )
@@ -236,8 +240,11 @@ async def _admin_alert_email(
           {_format_idr(amount_idr)}
           <span style="color:#6b7280;font-weight:400">(${amount_usd:.2f})</span>
         </td></tr>
-    <tr><td style="padding:6px 0;color:#6b7280">Buyer</td>
-        <td style="padding:6px 0;text-align:right">{buyer}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">User ID</td>
+        <td style="padding:6px 0;text-align:right;font-family:monospace;font-size:12px">
+          {user_id_display}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Email</td>
+        <td style="padding:6px 0;text-align:right">{email_display}</td></tr>
     <tr><td style="padding:6px 0;color:#6b7280">Method</td>
         <td style="padding:6px 0;text-align:right">{method}</td></tr>
     <tr><td style="padding:6px 0;color:#6b7280">Order</td>
@@ -321,14 +328,18 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
         meta=meta,
     )
 
-    # In-app: admins
+    # In-app: admins. The dashboard bell renders title + body as plain text
+    # (it doesn't surface `meta`), so every fact an admin needs — who bought
+    # it, what they bought, how much — has to be spelled out in body itself
+    # rather than left in meta for a UI that never reads it.
     record(
         audience="admin",
         type_="payment_settled",
         title=f"Payment received — {label}",
         body=(
-            f"{_format_idr(amount_idr)} (${amount_usd:.2f}) from "
-            f"{email or user_id} via {record_.get('payment_type') or 'midtrans'}."
+            f"{label} — {_format_idr(amount_idr)} (${amount_usd:.2f})  ·  "
+            f"Buyer: {user_id or 'unknown user'} ({email or 'no email on file'})  ·  "
+            f"Order {order_id} via {record_.get('payment_type') or 'midtrans'}"
         ),
         meta={**meta, "user_id": user_id, "email": email},
     )
@@ -341,7 +352,8 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
     # so one channel being down doesn't cost the others.
     await _admin_alert_email(
         label, amount_usd, amount_idr, order_id,
-        buyer=email or user_id,
+        user_id=user_id,
+        email=email,
         payment_type=record_.get("payment_type"),
     )
 
@@ -349,7 +361,9 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
     await _telegram_admin(
         f"💰 <b>Payment received</b>\n{label}\n"
         f"{_format_idr(amount_idr)} (${amount_usd:.2f})\n"
-        f"{email or user_id}\nOrder: <code>{order_id}</code>"
+        f"User: {user_id or 'unknown user'}\n"
+        f"Email: {email or 'no email on file'}\n"
+        f"Order: <code>{order_id}</code>"
     )
 
 
