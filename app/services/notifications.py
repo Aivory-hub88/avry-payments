@@ -4,13 +4,15 @@ Purchase notifications for customers and admins.
 Before this existed, a successful payment told nobody: no receipt, no in-app
 notice, and the admin dashboard's bell icon was static markup wired to nothing.
 
-Three channels, each independently optional so a missing one degrades rather than
+Four channels, each independently optional so a missing one degrades rather than
 breaks:
 
 * in-app  — a row in `billing.notifications` for the buyer and one for admins
 * email   — a receipt to the customer over SMTP (reuses the platform's existing
             credentials; falls back to the careers sender if no billing sender
             is configured)
+* admin email — a fixed-recipient alert to the people who need to know money
+            moved, over the same SMTP path as the receipt
 * Telegram— an admin ping, if a bot token and chat id are configured
 
 Every entry point is failure-tolerant by design. `payment_settled` is called
@@ -21,6 +23,7 @@ must stay paid even if the mail server is down.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Optional
@@ -191,6 +194,66 @@ async def _send_email(to_address: str, subject: str, html: str, text: str) -> bo
         return False
 
 
+# A small, fixed distribution list rather than a config knob deliberately:
+# these are the specific people who need to know money moved, not a setting
+# ops would ever change without also updating this file.
+ADMIN_ALERT_EMAILS = [
+    "billing@aivory.uk",
+    "irfan.reichmann@aivory.uk",
+    "haswin.bachtiar@aivory.id",
+    "clement.hansel@aivory.id",
+]
+
+
+async def _admin_alert_email(
+    label: str,
+    amount_usd: float,
+    amount_idr: Any,
+    order_id: str,
+    buyer: str,
+    payment_type: Optional[str],
+) -> None:
+    """Email the fixed admin list that a payment came in. Never raises."""
+    subject = f"Payment received — {label} ({_format_idr(amount_idr)})"
+    method = payment_type or "midtrans"
+    text = (
+        f"Aivory received a payment.\n\n"
+        f"{label}\n"
+        f"Amount: {_format_idr(amount_idr)} (${amount_usd:.2f})\n"
+        f"Buyer: {buyer}\n"
+        f"Method: {method}\n"
+        f"Order: {order_id}\n"
+    )
+    html = f"""\
+<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+            max-width:560px;margin:0 auto;color:#111827;line-height:1.5">
+  <h2 style="margin:0 0 16px;font-size:18px">Payment received</h2>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+    <tr><td style="padding:6px 0;color:#6b7280">Item</td>
+        <td style="padding:6px 0;text-align:right;font-weight:600">{label}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Amount</td>
+        <td style="padding:6px 0;text-align:right;font-weight:600">
+          {_format_idr(amount_idr)}
+          <span style="color:#6b7280;font-weight:400">(${amount_usd:.2f})</span>
+        </td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Buyer</td>
+        <td style="padding:6px 0;text-align:right">{buyer}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Method</td>
+        <td style="padding:6px 0;text-align:right">{method}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Order</td>
+        <td style="padding:6px 0;text-align:right;font-family:monospace;font-size:12px">
+          {order_id}</td></tr>
+  </table>
+  <p style="margin:20px 0 0;padding-top:12px;border-top:1px solid #e5e7eb;
+            color:#9ca3af;font-size:12px">
+    Aivory AI · automated payment alert.
+  </p>
+</div>"""
+    await asyncio.gather(
+        *(_send_email(addr, subject, html, text) for addr in ADMIN_ALERT_EMAILS)
+    )
+
+
 async def _telegram_admin(text: str) -> bool:
     """Ping the admin Telegram chat, if configured."""
     token = settings.telegram_bot_token
@@ -273,6 +336,14 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
     # Email receipt to the customer
     if email:
         await _send_receipt(email, label, amount_usd, amount_idr, order_id, record_)
+
+    # Admin email alert — independent of the receipt above and of Telegram,
+    # so one channel being down doesn't cost the others.
+    await _admin_alert_email(
+        label, amount_usd, amount_idr, order_id,
+        buyer=email or user_id,
+        payment_type=record_.get("payment_type"),
+    )
 
     # Admin Telegram ping
     await _telegram_admin(
