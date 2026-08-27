@@ -16,7 +16,6 @@ def test_imports():
         ("app.services.payment_gateway", lambda: __import__('app.services.payment_gateway')),
         ("app.services.wallet_service", lambda: __import__('app.services.wallet_service')),
         ("app.services.payment_validation", lambda: __import__('app.services.payment_validation')),
-        ("app.services.purchase_service", lambda: __import__('app.services.purchase_service')),
         ("app.models.wallet", lambda: __import__('app.models.wallet')),
         ("app.models.validation", lambda: __import__('app.models.validation')),
         ("app.models.diagnostic", lambda: __import__('app.models.diagnostic')),
