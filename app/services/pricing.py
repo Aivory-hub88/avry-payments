@@ -25,8 +25,17 @@ class UnknownProduct(ValueError):
 
 
 # One-off purchases and subscription plans, in USD.
-# Mirrors the pricing page (foundation $20, acceleration/pro $44,
-# intelligence/enterprise $499).
+#
+# Subscription ids follow the 2026 tier rebrand and are the SAME strings the
+# pricing page publishes and the identity service stores as a user's tier:
+# `operational` ($39) and `business` ($99). The pre-rebrand ids
+# (foundation / pro / acceleration / intelligence) survive only as read
+# aliases below, so historical orders stay resolvable.
+#
+# `enterprise` is deliberately absent: the pricing page sells it as
+# "Custom / Talk to Sales" and never publishes a figure, so a self-serve
+# checkout for it would charge an amount no customer was ever shown. Naming it
+# here again would silently reinstate that.
 FIXED_PRICES_USD: Dict[str, int] = {
     "ai_snapshot": 79,
     "ai_blueprint": 249,
@@ -34,9 +43,8 @@ FIXED_PRICES_USD: Dict[str, int] = {
     # Package. The dashboard and the settings modal have advertised this
     # bundle since launch; it was not sellable, so every click on it 400'd.
     "ai_fullstack": 299,
-    "foundation": 39,
-    "acceleration": 99,
-    "intelligence": 499,
+    "operational": 39,
+    "business": 99,
 }
 
 # Credit top-up packs, in USD, keyed by the credits granted.
@@ -67,9 +75,14 @@ CREDIT_PACKS_USD: Dict[int, int] = {
 }
 
 # Legacy/alternate ids the frontend has used for the same products.
+#
+# The subscription entries are the pre-2026-rebrand names. They are read-only
+# aliases: nothing new should be authored with them, but orders placed before
+# the rebrand carry them and must keep resolving to the right plan and price.
 ALIASES: Dict[str, str] = {
-    "pro": "acceleration",
-    "enterprise": "intelligence",
+    "foundation": "operational",
+    "pro": "business",
+    "acceleration": "business",
     # The dashboard's feature cards call the deep diagnostic "ai_diagnostic" and
     # the bundle "ai_bundle"; both name products that already exist here.
     "ai_diagnostic": "ai_snapshot",
@@ -89,9 +102,8 @@ PRODUCT_NAMES: Dict[str, str] = {
     "ai_snapshot": "Business Operations Assessment",
     "ai_blueprint": "Transformation Blueprint",
     "ai_fullstack": "Complete Transformation Package",
-    "foundation": "Operational Plan",
-    "acceleration": "Business Plan",
-    "intelligence": "Intelligence Plan",
+    "operational": "Operational Plan",
+    "business": "Business Plan",
 }
 
 

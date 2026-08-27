@@ -7,6 +7,7 @@ from datetime import datetime
 
 from app.models.validation import ValidationResult
 from app.database.db_service import db
+from app.services import pricing
 
 
 class PaymentValidationService:
@@ -16,25 +17,12 @@ class PaymentValidationService:
     All users (including super admin) validated identically - super admin has seeded payment records.
     """
     
-    # Product prices
-    BLUEPRINT_PRICE = 249  # $249 for Transformation Blueprint
-    SNAPSHOT_PRICE = 79  # $79 for Business Operations Assessment
-    FULL_STACK_PRICE = 299  # $299 for Complete Transformation Package
-    FOUNDATION_PRICE = 39  # $39 for Operational tier
-    PRO_PRICE = 99  # $99 for Business tier
-    ENTERPRISE_PRICE = 1000  # $1000 for Enterprise tier
-    
-    # Credit prices
-    CREDIT_PRICES = {
-        50: 5,
-        100: 9,
-        250: 20,
-        500: 38,
-        1000: 70,
-        2500: 165,
-        5000: 300,
-        10000: 550,
-    }
+    # Prices are NOT restated here. This class used to carry its own copy of
+    # the catalogue, which drifted: it priced Enterprise at $1000 while the
+    # gateway charged $499, and it kept the pre-rebrand `foundation`/`pro` ids
+    # after the pricing page had moved to `operational`/`business`. Everything
+    # now reads `app.services.pricing`, the same module that prices the actual
+    # Midtrans transaction, so the two can no longer disagree.
     
     async def validate_blueprint_access(
         self,
@@ -71,7 +59,7 @@ class PaymentValidationService:
         return ValidationResult(
             allowed=False,
             bypass=False,
-            message=f"Payment required: ${self.BLUEPRINT_PRICE} for AI Blueprint",
+            message=f"Payment required: ${self._get_price('ai_blueprint')} for AI Blueprint",
             payment_required=True
         )
     
@@ -110,7 +98,7 @@ class PaymentValidationService:
         return ValidationResult(
             allowed=False,
             bypass=False,
-            message=f"Payment required: ${self.SNAPSHOT_PRICE} for AI Snapshot",
+            message=f"Payment required: ${self._get_price('ai_snapshot')} for AI Snapshot",
             payment_required=True
         )
     
@@ -200,7 +188,7 @@ class PaymentValidationService:
         
         Args:
             user_id: User identifier
-            product: Product to validate (ai_snapshot, ai_blueprint, foundation, pro, enterprise, credits_*)
+            product: Product to validate (ai_snapshot, ai_blueprint, operational, business, credits_*)
             
         Returns:
             ValidationResult with access decision
@@ -208,7 +196,11 @@ class PaymentValidationService:
         payments = db.load_all_json("payments")
         
         # Check for subscription products
-        subscription_products = ["foundation", "pro", "enterprise"]
+        # Canonical 2026 tier ids; the pre-rebrand ids are normalised onto
+        # them by `pricing.canonical_product` so an older stored product row
+        # still matches.
+        subscription_products = ["operational", "business"]
+        product = pricing.canonical_product(product)
         if product in subscription_products:
             user_subscription = next(
                 (p for p in payments 
@@ -294,7 +286,7 @@ class PaymentValidationService:
                 payment_required=False
             )
         
-        price = self.CREDIT_PRICES.get(credit_amount, 0)
+        price = pricing.CREDIT_PACKS_USD.get(credit_amount, 0)
         return ValidationResult(
             allowed=False,
             bypass=False,
@@ -303,13 +295,13 @@ class PaymentValidationService:
         )
     
     def _get_price(self, product: str) -> int:
-        """Get price for any product."""
-        prices = {
-            "ai_snapshot": self.SNAPSHOT_PRICE,
-            "ai_blueprint": self.BLUEPRINT_PRICE,
-            "ai_fullstack": self.FULL_STACK_PRICE,
-            "foundation": self.FOUNDATION_PRICE,
-            "pro": self.PRO_PRICE,
-            "enterprise": self.ENTERPRISE_PRICE,
-        }
-        return prices.get(product, 0)
+        """
+        Get the price for any product, from the authoritative catalogue.
+
+        Returns 0 for anything not sellable, preserving the previous
+        dict-lookup behaviour for unknown ids.
+        """
+        try:
+            return int(pricing.resolve_price_usd(product))
+        except pricing.UnknownProduct:
+            return 0

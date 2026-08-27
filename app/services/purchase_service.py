@@ -66,32 +66,32 @@ class PurchaseService:
                 logger.info(f"User {user_id} unlocked: Full Stack (Mock: {is_mock})")
             
             # Handle subscription changes
-            elif product == "foundation":
-                user["tier"] = "foundation"
+            elif product == "operational":
+                user["tier"] = "operational"
                 user["is_subscribed"] = True
                 user["subscription_start"] = datetime.utcnow().isoformat()
                 user["credits_max"] = 50  # 50 IC/month
                 user["credits"] = 50
                 user_updated = True
-                logger.info(f"User {user_id} subscribed to: Foundation tier (Mock: {is_mock})")
+                logger.info(f"User {user_id} subscribed to: Operational tier (Mock: {is_mock})")
             
-            elif product == "acceleration":
-                user["tier"] = "acceleration"
+            elif product == "business":
+                user["tier"] = "business"
                 user["is_subscribed"] = True
                 user["subscription_start"] = datetime.utcnow().isoformat()
                 user["credits_max"] = 300  # 300 IC/month
                 user["credits"] = 300
                 user_updated = True
-                logger.info(f"User {user_id} subscribed to: Acceleration (Pro) tier (Mock: {is_mock})")
+                logger.info(f"User {user_id} subscribed to: Business tier (Mock: {is_mock})")
             
-            elif product == "intelligence":
-                user["tier"] = "intelligence"
+            elif product == "enterprise":
+                user["tier"] = "enterprise"
                 user["is_subscribed"] = True
                 user["subscription_start"] = datetime.utcnow().isoformat()
                 user["credits_max"] = 2000  # 2000 IC/month
                 user["credits"] = 2000
                 user_updated = True
-                logger.info(f"User {user_id} subscribed to: Intelligence (Enterprise) tier (Mock: {is_mock})")
+                logger.info(f"User {user_id} subscribed to: Enterprise tier (Mock: {is_mock})")
             
             # Handle credit purchases
             elif product.startswith("credits_"):
