@@ -168,6 +168,46 @@ class MidtransPaymentService:
         {"credit_card", "gopay", "dana", "qris", "shopeepay"}
     )
 
+    # Midtrans has no separate debit-card channel: Visa/Mastercard/JCB debit
+    # cards are acquired through `credit_card` exactly like credit cards. Our
+    # own checkout UI still lists "Debit Card" as its own tile, so accept that
+    # label and fold it into the channel that actually processes it rather than
+    # dropping it as unsupported (which would silently widen the Snap list).
+    CHANNEL_ALIASES = {
+        "debit_card": "credit_card",
+        "debitcard": "credit_card",
+        "debit": "credit_card",
+        "card": "credit_card",
+    }
+
+    # The channels checkout offers when the caller expresses no preference.
+    # Without this Snap falls back to *every* channel enabled on the merchant
+    # account — bank transfer/VA, Indomaret, Alfamart, Akulaku, Kredivo — which
+    # is not what we sell against. Ordered as Snap should present them.
+    DEFAULT_SNAP_CHANNELS = ("credit_card", "gopay", "qris", "dana", "shopeepay")
+
+    @classmethod
+    def normalise_channels(cls, channels: Optional[List[str]]) -> List[str]:
+        """
+        Map caller-supplied channel names onto real Snap channels.
+
+        Aliases are resolved first, unknown names dropped, and duplicates
+        collapsed while preserving the caller's ordering (Snap renders the list
+        in the order it is given, so the first entry is the tile the customer
+        lands on).
+        """
+        resolved: List[str] = []
+        for raw in channels or []:
+            if not isinstance(raw, str):
+                continue
+            # Fold the display spellings a UI is likely to send ("Debit Card",
+            # "credit-card") onto the snake_case Snap identifiers.
+            key = "_".join(raw.strip().lower().replace("-", " ").split())
+            key = cls.CHANNEL_ALIASES.get(key, key)
+            if key in cls.SUPPORTED_SNAP_CHANNELS and key not in resolved:
+                resolved.append(key)
+        return resolved
+
     # ------------------------------------------------------------------
     # Transaction creation
     # ------------------------------------------------------------------
@@ -219,16 +259,20 @@ class MidtransPaymentService:
 
         # Honour the channel the customer already chose on our own page, so
         # Snap opens on it instead of asking them to pick a second time.
-        # Unknown values are dropped rather than forwarded; an empty result
-        # means no restriction, which is Snap's default of showing everything.
-        requested = [c for c in (enabled_payments or []) if c in self.SUPPORTED_SNAP_CHANNELS]
-        if requested:
-            transaction_data["enabled_payments"] = requested
-        elif enabled_payments:
+        # Unknown values are dropped rather than forwarded.
+        #
+        # `enabled_payments` is now always sent. Omitting it lets Snap fall back
+        # to every channel enabled on the merchant account, which is how bank
+        # transfer/VA, Indomaret and the paylaters ended up in checkout; the
+        # default list keeps that to the channels we actually support.
+        requested = self.normalise_channels(enabled_payments)
+        if enabled_payments and not requested:
             logger.warning(
-                "Ignoring unsupported enabled_payments %s; showing all channels",
+                "Ignoring unsupported enabled_payments %s; falling back to %s",
                 enabled_payments,
+                list(self.DEFAULT_SNAP_CHANNELS),
             )
+        transaction_data["enabled_payments"] = requested or list(self.DEFAULT_SNAP_CHANNELS)
 
         if custom_field1:
             transaction_data["custom_field1"] = custom_field1
