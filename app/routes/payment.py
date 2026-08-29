@@ -100,6 +100,59 @@ class CreateTransactionResponse(BaseModel):
     error: Optional[str] = None
 
 
+class ChargeRequest(BaseModel):
+    """
+    Request to charge directly via Core API, so the checkout UI stays ours.
+
+    Same rules as CreateTransactionRequest: no `amount` (the catalogue decides),
+    and `user_id` is honoured for admins only.
+    """
+    product: str = Field(..., description="Product being purchased")
+    channel: str = Field(
+        ..., description="Payment channel: gopay, qris, shopeepay, bank_transfer, credit_card",
+    )
+    user_id: Optional[str] = Field(None, description="Target user (admins only)")
+    customer_email: Optional[str] = Field(None, description="Customer email")
+    customer_first_name: Optional[str] = Field(None, description="Customer first name")
+    card_token_id: Optional[str] = Field(
+        None,
+        description="Card token from Midtrans' browser JS. Required for credit_card. "
+                    "Raw card details are never accepted here.",
+    )
+    bank: str = Field("bca", description="Bank for a bank_transfer VA")
+
+
+class ChargeResponse(BaseModel):
+    """
+    Response for a Core API charge.
+
+    Exactly one of the render fields is populated for a given channel; the rest
+    stay null. The frontend draws the payment from these instead of handing the
+    screen to Snap.
+    """
+    success: bool
+    order_id: Optional[str] = None
+    channel: Optional[str] = None
+    transaction_id: Optional[str] = None
+    transaction_status: Optional[str] = None
+    fraud_status: Optional[str] = None
+    expiry_time: Optional[str] = None
+    amount_usd: Optional[float] = None
+    amount_idr: Optional[int] = None
+    # Render payload
+    qr_string: Optional[str] = None
+    qr_url: Optional[str] = None
+    deeplink_url: Optional[str] = None
+    va_number: Optional[str] = None
+    va_bank: Optional[str] = None
+    biller_code: Optional[str] = None
+    redirect_url: Optional[str] = None
+    error: Optional[str] = None
+    # True when the channel has no Core API equivalent (DANA), so the caller
+    # should fall back to /midtrans/create rather than showing an error.
+    fallback_to_snap: Optional[bool] = None
+
+
 class TransactionStatusResponse(BaseModel):
     """Response for transaction status check."""
     success: bool
@@ -239,6 +292,75 @@ async def create_midtrans_transaction(
         })
 
     return CreateTransactionResponse(**result)
+
+
+@router.post("/midtrans/charge", response_model=ChargeResponse)
+async def charge_midtrans(
+    request: ChargeRequest,
+    caller: dict = Depends(require_auth),
+):
+    """
+    Charge directly through Core API, keeping the checkout UI on our page.
+
+    This does NOT replace /midtrans/create. Both are live so the migration can
+    be rolled out — and rolled back — one channel at a time, and so DANA, which
+    Core API has no payment_type for, keeps working through Snap.
+
+    The order is recorded exactly as the Snap path records it, so settlement,
+    the webhook and the receipt all behave identically from here on.
+    """
+    target_user_id = _caller_user_id(caller)
+    if request.user_id and request.user_id != target_user_id:
+        if not _is_admin(caller):
+            raise HTTPException(status_code=403, detail="Cannot transact for another user")
+        target_user_id = request.user_id
+
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="Could not determine the paying user")
+
+    await fx.ensure_fresh()
+
+    try:
+        amount_usd = pricing.resolve_price_usd(request.product)
+        amount_idr = pricing.resolve_gross_amount_idr(request.product)
+    except pricing.UnknownProduct as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    customer_details: Dict[str, Any] = {}
+    if request.customer_email:
+        customer_details["email"] = request.customer_email
+    if request.customer_first_name:
+        customer_details["first_name"] = request.customer_first_name
+
+    result = await midtrans_service.create_charge(
+        user_id=target_user_id,
+        product=request.product,
+        channel=request.channel,
+        customer_details=customer_details,
+        card_token_id=request.card_token_id,
+        bank=request.bank,
+    )
+
+    if result.get("success"):
+        payment_repo.create({
+            "payment_id": generate_id("payment"),
+            "order_id": result["order_id"],
+            "user_id": target_user_id,
+            "product": pricing.canonical_product(request.product),
+            "amount": amount_usd,
+            "amount_idr": amount_idr,
+            "usd_idr_rate": fx.current_rate(),
+            # Core API answers immediately with the gateway's own view. It is
+            # recorded as-is, but the webhook remains the authority: a charge
+            # that says "pending" here can still settle minutes later.
+            "status": "pending",
+            "payment_method": "midtrans",
+            "is_mock": result.get("is_mock", False),
+            "transaction_id": result.get("transaction_id"),
+            "customer_email": request.customer_email,
+        })
+
+    return ChargeResponse(**result)
 
 
 @router.get("/receipt/{order_id}")
