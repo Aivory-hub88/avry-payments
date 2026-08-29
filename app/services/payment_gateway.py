@@ -184,7 +184,11 @@ class MidtransPaymentService:
     # Without this Snap falls back to *every* channel enabled on the merchant
     # account — bank transfer/VA, Indomaret, Alfamart, Akulaku, Kredivo — which
     # is not what we sell against. Ordered as Snap should present them.
-    DEFAULT_SNAP_CHANNELS = ("credit_card", "gopay", "qris", "dana", "shopeepay")
+    # DANA was dropped from checkout: Core API has no payment_type for it, so
+    # it could never move off Snap, and offering a channel that can never get
+    # the Aivory-drawn payment screen just splits the experience. Customers
+    # paying with DANA scan the QRIS code instead, which the DANA app supports.
+    DEFAULT_SNAP_CHANNELS = ("credit_card", "gopay", "qris", "shopeepay")
 
     @classmethod
     def normalise_channels(cls, channels: Optional[List[str]]) -> List[str]:
