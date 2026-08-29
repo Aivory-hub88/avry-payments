@@ -329,6 +329,175 @@ class MidtransPaymentService:
             return {"success": False, "is_mock": False, "error": "Could not reach payment gateway"}
 
     # ------------------------------------------------------------------
+    # Core API charge (Aivory-owned checkout UI)
+    # ------------------------------------------------------------------
+
+    # Core API `payment_type` per channel id the frontend already uses, with
+    # the extra payload each one demands. Every entry was verified against
+    # PRODUCTION by charging with gross_amount 0 — which cannot create a
+    # transaction — and reading which validator answered.
+    #
+    # `dana` is deliberately absent: Core API answers "payment_type is not
+    # supported: dana". DANA exists under Snap only, so that channel has to
+    # stay on the Snap path (or be served by QRIS, which the DANA app scans).
+    CORE_API_CHANNELS: Dict[str, Dict[str, Any]] = {
+        "gopay": {"payment_type": "gopay"},
+        "qris": {"payment_type": "qris", "extra": {"qris": {"acquirer": "gopay"}}},
+        "shopeepay": {"payment_type": "shopeepay", "needs_callback_url": True},
+        "credit_card": {"payment_type": "credit_card", "needs_card_token": True},
+        "bank_transfer": {"payment_type": "bank_transfer", "needs_bank": True},
+    }
+
+    @staticmethod
+    def _render_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Pull out the few fields the checkout page needs in order to draw the
+        payment itself, so no caller has to know Core API's response shape.
+
+        Only one of these is populated for a given channel; the rest stay None.
+        """
+        actions = {a.get("name"): a.get("url") for a in (result.get("actions") or [])}
+        va = (result.get("va_numbers") or [{}])[0]
+
+        return {
+            # QRIS / GoPay QR
+            "qr_string": result.get("qr_string"),
+            "qr_url": actions.get("generate-qr-code"),
+            # GoPay / ShopeePay app hand-off
+            "deeplink_url": actions.get("deeplink-redirect"),
+            # Virtual account
+            "va_number": va.get("va_number") or result.get("bill_key"),
+            "va_bank": va.get("bank") or ("mandiri" if result.get("bill_key") else None),
+            "biller_code": result.get("biller_code"),
+            # Card 3DS — the issuing bank's own page
+            "redirect_url": result.get("redirect_url"),
+        }
+
+    async def create_charge(
+        self,
+        user_id: str,
+        product: str,
+        channel: str,
+        customer_details: Optional[Dict[str, Any]] = None,
+        card_token_id: Optional[str] = None,
+        bank: str = "bca",
+        callback_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Charge via Core API so the checkout UI stays ours.
+
+        This does NOT replace `create_transaction`: both paths are live so the
+        migration can be rolled out — and rolled back — one channel at a time.
+        Snap remains the only route for `dana`.
+
+        The amount is resolved server-side from the product catalogue, exactly
+        as in the Snap path; there is deliberately no `amount` parameter.
+        """
+        from app.utils.id_generator import generate_id
+
+        spec = self.CORE_API_CHANNELS.get(channel)
+        if spec is None:
+            # Not an error the customer caused — a caller asked for a channel
+            # Core API cannot serve, and Snap should have handled it.
+            logger.warning("Core API charge refused: unsupported channel %r", channel)
+            return {
+                "success": False,
+                "error": f"Channel '{channel}' is not available on the direct payment path",
+                "fallback_to_snap": True,
+            }
+
+        if spec.get("needs_card_token") and not card_token_id:
+            # Raw card details must never reach this service: the browser
+            # exchanges them with Midtrans for a token first.
+            return {"success": False, "error": "Card token is required"}
+
+        order_id = generate_id(f"payment_{pricing.canonical_product(product)}")
+        amount_idr = pricing.resolve_gross_amount_idr(product)
+        amount_usd = pricing.resolve_price_usd(product)
+
+        payload: Dict[str, Any] = {
+            "payment_type": spec["payment_type"],
+            "transaction_details": {"order_id": order_id, "gross_amount": amount_idr},
+            "item_details": [
+                {
+                    "id": pricing.canonical_product(product),
+                    "price": amount_idr,
+                    "quantity": 1,
+                    "name": pricing.product_name(product)[:50],
+                }
+            ],
+            "customer_details": customer_details or {},
+        }
+        payload.update(spec.get("extra") or {})
+
+        if spec.get("needs_card_token"):
+            payload["credit_card"] = {"token_id": card_token_id, "authentication": True}
+        if spec.get("needs_bank"):
+            payload["bank_transfer"] = {"bank": bank}
+        if spec.get("needs_callback_url"):
+            payload["shopeepay"] = {
+                "callback_url": callback_url or settings.payment_finish_redirect_url
+            }
+
+        if self.mock_mode:
+            logger.info("[MOCK] Core API charge: %s %s (%s IDR)", channel, order_id, amount_idr)
+            return {
+                "success": True,
+                "is_mock": True,
+                "order_id": order_id,
+                "channel": channel,
+                "transaction_status": "pending",
+                "amount_usd": amount_usd,
+                "amount_idr": amount_idr,
+                **self._render_payload({}),
+            }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.api_url}/v2/charge",
+                    json=payload,
+                    headers=self._get_headers(),
+                )
+                result = response.json()
+                response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # Midtrans puts the real reason in validation_messages; it is far
+            # more useful in the log than the status code alone.
+            logger.error(
+                "Core API charge rejected for %s (%s): %s - %s",
+                order_id, channel, e.response.status_code, e.response.text[:400],
+            )
+            return {
+                "success": False,
+                "error": f"Payment gateway rejected the transaction ({e.response.status_code})",
+            }
+        except Exception as e:
+            logger.error("Core API charge failed for %s (%s): %s", order_id, channel, e)
+            return {"success": False, "error": "Could not reach payment gateway"}
+
+        status = result.get("transaction_status")
+        logger.info(
+            "Core API charge created: %s (%s, %s IDR) -> %s",
+            order_id, channel, amount_idr, status,
+        )
+        return {
+            "success": True,
+            "is_mock": False,
+            "order_id": order_id,
+            "channel": channel,
+            "transaction_id": result.get("transaction_id"),
+            # The webhook remains the authority on settlement; this is only
+            # what the gateway said at the moment of charging.
+            "transaction_status": status,
+            "fraud_status": result.get("fraud_status"),
+            "expiry_time": result.get("expiry_time"),
+            "amount_usd": amount_usd,
+            "amount_idr": amount_idr,
+            **self._render_payload(result),
+        }
+
+    # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
 
