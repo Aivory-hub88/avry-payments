@@ -45,6 +45,18 @@ def _extract_token(authorization: Optional[str]) -> Optional[str]:
     return authorization.strip() or None
 
 
+def _is_refresh_token(payload: dict) -> bool:
+    """
+    Backend-issued refresh tokens share JWT_SECRET with access tokens but are
+    not bearer credentials: they live 30 days and keep verifying after logout
+    (logout only deletes the session row the backend's /refresh consults).
+    Newer ones carry type "refresh"; older untyped ones always carry
+    session_id, which backend access tokens never do.
+    """
+    kind = payload.get("type")
+    return kind == "refresh" or (kind is None and "session_id" in payload)
+
+
 def verify_token(token: str) -> Optional[dict]:
     """
     Verify a JWT against the configured secrets (Supabase first, then legacy).
@@ -59,7 +71,7 @@ def verify_token(token: str) -> Optional[dict]:
         try:
             # Signature + expiry are enforced; audience is not verified because
             # Supabase uses aud="authenticated" while legacy tokens omit it.
-            return jwt.decode(
+            payload = jwt.decode(
                 token,
                 secret,
                 algorithms=[JWT_ALGORITHM],
@@ -67,6 +79,11 @@ def verify_token(token: str) -> Optional[dict]:
             )
         except jwt.InvalidTokenError:
             continue
+        # Only for backend-signed tokens: Supabase access tokens legitimately
+        # carry session_id.
+        if secret == JWT_SECRET and secret != SUPABASE_JWT_SECRET and _is_refresh_token(payload):
+            return None
+        return payload
     return None
 
 
