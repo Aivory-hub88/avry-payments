@@ -28,7 +28,7 @@ class UnknownProduct(ValueError):
 #
 # Subscription ids follow the 2026 tier rebrand and are the SAME strings the
 # pricing page publishes and the identity service stores as a user's tier:
-# `operational` ($39) and `business` ($99). The pre-rebrand ids
+# `operational` ($20) and `business` ($99). The pre-rebrand ids
 # (foundation / pro / acceleration / intelligence) survive only as read
 # aliases below, so historical orders stay resolvable.
 #
@@ -43,7 +43,7 @@ FIXED_PRICES_USD: Dict[str, int] = {
     # Package. The dashboard and the settings modal have advertised this
     # bundle since launch; it was not sellable, so every click on it 400'd.
     "ai_fullstack": 299,
-    "operational": 39,
+    "operational": 20,
     "business": 99,
 }
 
