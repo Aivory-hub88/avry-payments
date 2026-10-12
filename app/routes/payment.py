@@ -23,8 +23,8 @@ from pydantic import BaseModel, Field
 
 from app.auth import require_admin, require_auth
 from app.config import settings
-from app.database import payment_repo
-from app.services import fx, pricing, receipt_pdf
+from app.database import payment_repo, promo_repo
+from app.services import fx, pricing, promo, receipt_pdf
 from app.services.payment_gateway import midtrans_service
 from app.services.payment_validation import PaymentValidationService
 from app.utils.id_generator import generate_id
@@ -63,6 +63,38 @@ def _require_self_or_admin(payload: dict, user_id: str) -> None:
         raise HTTPException(status_code=403, detail="Not permitted for this user")
 
 
+def _create_order(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert an order, turning a just-exhausted promo into a clean 409."""
+    try:
+        return payment_repo.create(record)
+    except payment_repo.PromoUnavailable as e:
+        raise HTTPException(
+            status_code=409, detail={"error": e.message, "promo_error": e.reason}
+        )
+
+
+def _price_order(product: str, raw_promo: Optional[str], user_id: str):
+    """
+    Price an order server-side, with an optional promo code applied.
+
+    Returns (charged_usd, charged_idr, list_usd, discount_usd, promo_code). A bad
+    code is a 400 with a stable `promo_error` reason, so checkout can show the
+    message and let the customer carry on without it.
+    """
+    try:
+        list_usd = pricing.resolve_price_usd(product)
+        if raw_promo and raw_promo.strip():
+            q = promo.quote(raw_promo, product, user_id)
+            return q.final_usd, q.final_idr, q.list_usd, q.discount_usd, q.code
+        return list_usd, pricing.resolve_gross_amount_idr(product), list_usd, 0.0, None
+    except promo.PromoError as e:
+        raise HTTPException(
+            status_code=400, detail={"error": e.message, "promo_error": e.reason}
+        )
+    except pricing.UnknownProduct as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ============================================================================
 # Pydantic Models
 # ============================================================================
@@ -85,6 +117,9 @@ class CreateTransactionRequest(BaseModel):
         None,
         description="Restrict the Snap channel list to the one the customer picked. "
                     "Validated against the gateway allowlist; unknown values are ignored.",
+    )
+    promo_code: Optional[str] = Field(
+        None, description="Promo code; the discount is derived server-side"
     )
 
 
@@ -120,6 +155,9 @@ class ChargeRequest(BaseModel):
                     "Raw card details are never accepted here.",
     )
     bank: str = Field("bca", description="Bank for a bank_transfer VA")
+    promo_code: Optional[str] = Field(
+        None, description="Promo code; the discount is derived server-side"
+    )
 
 
 class ChargeResponse(BaseModel):
@@ -205,6 +243,9 @@ class ManualPaymentRequest(BaseModel):
     )
     customer_email: Optional[str] = Field(None, description="Customer email")
     user_id: Optional[str] = Field(None, description="Target user (admins only)")
+    promo_code: Optional[str] = Field(
+        None, description="Promo code; the discount is derived server-side"
+    )
 
 
 class ManualDecisionRequest(BaseModel):
@@ -226,6 +267,33 @@ class ConfirmPaymentRequest(BaseModel):
 # ============================================================================
 # API Endpoints
 # ============================================================================
+
+class PromoValidateRequest(BaseModel):
+    code: str = Field(..., max_length=64)
+    product: str = Field(..., description="Product the code would be used on")
+
+
+@router.post("/promo/validate")
+async def validate_promo(request: PromoValidateRequest, caller: dict = Depends(require_auth)):
+    """
+    Preview a promo code against a product for the signed-in customer.
+
+    Read-only: nothing is reserved until an order is created with the code. The
+    amounts returned are the ones the order will actually be charged, because
+    both go through `promo.quote()`.
+    """
+    user_id = _caller_user_id(caller)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Could not determine the paying user")
+    await fx.ensure_fresh()
+    try:
+        q = promo.quote(request.code, request.product, user_id)
+    except promo.PromoError as e:
+        return {"success": False, "valid": False, "reason": e.reason, "error": e.message}
+    except pricing.UnknownProduct as e:
+        return {"success": False, "valid": False, "reason": "not_applicable", "error": str(e)}
+    return {"success": True, "valid": True, **q.public()}
+
 
 @router.post("/midtrans/create", response_model=CreateTransactionResponse)
 async def create_midtrans_transaction(
@@ -251,11 +319,9 @@ async def create_midtrans_transaction(
     # Price in IDR against a current rate, not a stale one.
     await fx.ensure_fresh()
 
-    try:
-        amount_usd = pricing.resolve_price_usd(request.product)
-        amount_idr = pricing.resolve_gross_amount_idr(request.product)
-    except pricing.UnknownProduct as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    amount_usd, amount_idr, list_usd, discount_usd, promo_code = _price_order(
+        request.product, request.promo_code, target_user_id
+    )
 
     customer_details: Dict[str, Any] = {}
     if request.customer_email:
@@ -270,13 +336,14 @@ async def create_midtrans_transaction(
         custom_field1=request.custom_field1,
         custom_field2=request.custom_field2,
         enabled_payments=request.enabled_payments,
+        discount_usd=discount_usd,
     )
 
     if result.get("success"):
         # Record the order *with the server-side amount and the rate that
         # produced it*, so settlement can later check that Midtrans collected
         # exactly this much, and so an old charge stays explainable.
-        payment_repo.create({
+        _create_order({
             "payment_id": generate_id("payment"),
             "order_id": result["order_id"],
             "user_id": target_user_id,
@@ -284,6 +351,9 @@ async def create_midtrans_transaction(
             "amount": amount_usd,
             "amount_idr": amount_idr,
             "usd_idr_rate": fx.current_rate(),
+            "promo_code": promo_code,
+            "discount_usd": discount_usd,
+            "list_amount_usd": list_usd,
             "status": "pending",
             "payment_method": "midtrans",
             "is_mock": result.get("is_mock", False),
@@ -320,11 +390,9 @@ async def charge_midtrans(
 
     await fx.ensure_fresh()
 
-    try:
-        amount_usd = pricing.resolve_price_usd(request.product)
-        amount_idr = pricing.resolve_gross_amount_idr(request.product)
-    except pricing.UnknownProduct as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    amount_usd, amount_idr, list_usd, discount_usd, promo_code = _price_order(
+        request.product, request.promo_code, target_user_id
+    )
 
     customer_details: Dict[str, Any] = {}
     if request.customer_email:
@@ -339,10 +407,11 @@ async def charge_midtrans(
         customer_details=customer_details,
         card_token_id=request.card_token_id,
         bank=request.bank,
+        discount_usd=discount_usd,
     )
 
     if result.get("success"):
-        payment_repo.create({
+        _create_order({
             "payment_id": generate_id("payment"),
             "order_id": result["order_id"],
             "user_id": target_user_id,
@@ -350,6 +419,9 @@ async def charge_midtrans(
             "amount": amount_usd,
             "amount_idr": amount_idr,
             "usd_idr_rate": fx.current_rate(),
+            "promo_code": promo_code,
+            "discount_usd": discount_usd,
+            "list_amount_usd": list_usd,
             # Core API answers immediately with the gateway's own view. It is
             # recorded as-is, but the webhook remains the authority: a charge
             # that says "pending" here can still settle minutes later.
@@ -546,16 +618,14 @@ async def submit_manual_payment(
 
     await fx.ensure_fresh()
 
-    try:
-        amount_usd = pricing.resolve_price_usd(request.product)
-        amount_idr = pricing.resolve_gross_amount_idr(request.product)
-    except pricing.UnknownProduct as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    amount_usd, amount_idr, list_usd, discount_usd, promo_code = _price_order(
+        request.product, request.promo_code, target_user_id
+    )
 
     canonical = pricing.canonical_product(request.product)
     order_id = generate_id(f"manual_{canonical}")
 
-    record = payment_repo.create({
+    record = _create_order({
         "payment_id": generate_id("payment"),
         "order_id": order_id,
         "user_id": target_user_id,
@@ -563,6 +633,9 @@ async def submit_manual_payment(
         "amount": amount_usd,
         "amount_idr": amount_idr,
         "usd_idr_rate": fx.current_rate(),
+        "promo_code": promo_code,
+        "discount_usd": discount_usd,
+        "list_amount_usd": list_usd,
         "status": MANUAL_PENDING_STATUS,
         "payment_method": f"manual_{request.payment_method}",
         # The customer's own reference, not a gateway id — kept so an admin can
@@ -639,7 +712,7 @@ async def approve_manual_payment(
             granted, detail = await apply_entitlement(
                 user_id=locked.get("user_id"),
                 product=locked.get("product"),
-                amount_usd=float(locked.get("amount") or 0),
+                amount_usd=float(locked.get("list_amount_usd") or locked.get("amount") or 0),
                 order_id=order_id,
             )
 

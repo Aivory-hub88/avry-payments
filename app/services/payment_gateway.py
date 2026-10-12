@@ -224,9 +224,13 @@ class MidtransPaymentService:
         custom_field1: Optional[str] = None,
         custom_field2: Optional[str] = None,
         enabled_payments: Optional[List[str]] = None,
+        discount_usd: float = 0.0,
     ) -> Dict[str, Any]:
         """
         Create a Snap transaction for `product`.
+
+        `discount_usd` is a promo discount the caller derived server-side via
+        `promo.quote()`; it is the only way a charge goes below list price.
 
         The amount is resolved server-side from the product catalogue; there is
         deliberately no `amount` parameter for a caller to influence.
@@ -234,8 +238,7 @@ class MidtransPaymentService:
         from app.utils.id_generator import generate_id
 
         order_id = generate_id(f"payment_{pricing.canonical_product(product)}")
-        amount_idr = pricing.resolve_gross_amount_idr(product)
-        amount_usd = pricing.resolve_price_usd(product)
+        amount_usd, amount_idr = pricing.resolve_charge(product, discount_usd)
 
         expiry_start = datetime.now(timezone.utc)
         transaction_data: Dict[str, Any] = {
@@ -386,6 +389,7 @@ class MidtransPaymentService:
         card_token_id: Optional[str] = None,
         bank: str = "bca",
         callback_url: Optional[str] = None,
+        discount_usd: float = 0.0,
     ) -> Dict[str, Any]:
         """
         Charge via Core API so the checkout UI stays ours.
@@ -416,8 +420,7 @@ class MidtransPaymentService:
             return {"success": False, "error": "Card token is required"}
 
         order_id = generate_id(f"payment_{pricing.canonical_product(product)}")
-        amount_idr = pricing.resolve_gross_amount_idr(product)
-        amount_usd = pricing.resolve_price_usd(product)
+        amount_usd, amount_idr = pricing.resolve_charge(product, discount_usd)
 
         payload: Dict[str, Any] = {
             "payment_type": spec["payment_type"],
@@ -698,7 +701,8 @@ class MidtransPaymentService:
             granted, detail = await apply_entitlement(
                 user_id=locked.get("user_id"),
                 product=locked.get("product"),
-                amount_usd=float(locked.get("amount") or 0),
+                # Granted at list value: a promo reduces the charge, not the product.
+                amount_usd=float(locked.get("list_amount_usd") or locked.get("amount") or 0),
                 order_id=order_id,
             )
 

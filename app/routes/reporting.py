@@ -136,7 +136,7 @@ async def export_orders(
         "created_at", "order_id", "payment_id", "user_id", "customer_email",
         "product", "amount_usd", "amount_idr", "usd_idr_rate", "status",
         "payment_method", "payment_type", "transaction_status", "fraud_status",
-        "is_mock", "granted_at",
+        "is_mock", "granted_at", "promo_code", "discount_usd",
     ]
 
     def generate():
@@ -148,6 +148,7 @@ async def export_orders(
                 r.get("status"), r.get("payment_method"), r.get("payment_type"),
                 r.get("transaction_status"), r.get("fraud_status"),
                 "yes" if r.get("is_mock") else "no", r.get("granted_at"),
+                r.get("promo_code") or "", f"{r.get('discount_usd', 0):.2f}",
             ]
 
     return _csv_response("aivory-payments", header, generate())

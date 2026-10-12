@@ -173,6 +173,25 @@ def resolve_gross_amount_idr(product: str) -> int:
     return idr
 
 
+def resolve_charge(product: str, discount_usd: float = 0.0) -> "tuple[float, int]":
+    """
+    The (USD, IDR) actually charged for `product` after a server-derived discount.
+
+    `discount_usd` must come from `promo.quote()`, never from a request body.
+    Raises UnknownProduct if the discounted total falls under Midtrans' floor.
+    """
+    list_usd = resolve_price_usd(product)
+    net_usd = round(list_usd - max(discount_usd, 0.0), 2)
+    if net_usd <= 0:
+        raise UnknownProduct(f"{product} would be charged at or below zero")
+    idr = usd_to_idr(net_usd)
+    if idr < MIN_GROSS_AMOUNT_IDR:
+        raise UnknownProduct(
+            f"{product} converts to Rp {idr}, below Midtrans' Rp {MIN_GROSS_AMOUNT_IDR} minimum"
+        )
+    return net_usd, idr
+
+
 def product_name(product: str) -> str:
     """Human-readable label for a product id, used in Midtrans item details."""
     key = canonical_product(product)
