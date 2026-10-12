@@ -102,6 +102,39 @@ ALTER TABLE billing.payment_orders
 CREATE UNIQUE INDEX IF NOT EXISTS payment_orders_invoice_number_idx
     ON billing.payment_orders (invoice_number)
     WHERE invoice_number IS NOT NULL;
+
+-- Promo codes. Redemptions are not stored separately: they are derived from
+-- payment_orders.promo_code, so a count can never drift from the ledger.
+CREATE TABLE IF NOT EXISTS billing.promo_codes (
+    code            TEXT PRIMARY KEY,
+    discount_type   TEXT NOT NULL CHECK (discount_type IN ('percent', 'fixed_usd')),
+    discount_value  NUMERIC(10,2) NOT NULL CHECK (discount_value > 0),
+    -- NULL = unlimited
+    max_redemptions INTEGER CHECK (max_redemptions IS NULL OR max_redemptions > 0),
+    per_user_limit  INTEGER NOT NULL DEFAULT 1 CHECK (per_user_limit > 0),
+    valid_from      TIMESTAMPTZ,
+    expires_at      TIMESTAMPTZ,
+    -- NULL = every discountable product; otherwise canonical product ids / prefixes
+    products        TEXT[],
+    active          BOOLEAN NOT NULL DEFAULT true,
+    campaign        TEXT,
+    note            TEXT,
+    created_by      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS promo_codes_campaign_idx ON billing.promo_codes (campaign);
+
+-- `amount_usd` stays "what the customer was charged"; the list price and the
+-- discount are kept beside it so an order with a promo remains explainable and
+-- the entitlement is still granted at list value.
+ALTER TABLE billing.payment_orders
+    ADD COLUMN IF NOT EXISTS promo_code      TEXT,
+    ADD COLUMN IF NOT EXISTS discount_usd    NUMERIC(12,2) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS list_amount_usd NUMERIC(12,2);
+CREATE INDEX IF NOT EXISTS payment_orders_promo_idx
+    ON billing.payment_orders (promo_code)
+    WHERE promo_code IS NOT NULL;
 """
 
 

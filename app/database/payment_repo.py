@@ -31,7 +31,8 @@ _COLUMNS = (
     "order_id, payment_id, user_id, product, amount_usd, amount_idr, usd_idr_rate, "
     "status, payment_method, payment_type, transaction_status, fraud_status, "
     "midtrans_transaction_id, customer_email, is_mock, granted_at, grant_detail, "
-    "grant_error, created_at, updated_at, invoice_number"
+    "grant_error, created_at, updated_at, invoice_number, "
+    "promo_code, discount_usd, list_amount_usd"
 )
 
 # Columns an admin may sort by. Whitelisted rather than interpolated, so a
@@ -76,19 +77,59 @@ def _row_to_record(row: Tuple) -> Dict[str, Any]:
         "created_at": row[18].isoformat() if row[18] else None,
         "updated_at": row[19].isoformat() if row[19] else None,
         "invoice_number": row[20],
+        "promo_code": row[21],
+        "discount_usd": float(row[22]) if row[22] is not None else 0.0,
+        # Undiscounted price; falls back to the charge for rows predating promos.
+        "list_amount_usd": float(row[23]) if row[23] is not None else (
+            float(row[4]) if row[4] is not None else 0.0
+        ),
     }
 
 
+class PromoUnavailable(Exception):
+    """The order's promo code ran out between pricing and insert."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+
+
 def create(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Insert a new pending order."""
+    """
+    Insert a new pending order.
+
+    When the order carries a promo code, the code's row is locked and its usage
+    re-counted inside the insert's own transaction. Pricing already checked the
+    cap, but two customers can pass that check together on the last redemption;
+    serialising on the promo row here is what makes the cap hold.
+    """
+    code = record.get("promo_code")
     with pg.cursor() as cur:
+        if code:
+            from app.database import promo_repo
+
+            cur.execute(
+                "SELECT max_redemptions, per_user_limit, active FROM billing.promo_codes "
+                "WHERE code = %s FOR UPDATE",
+                (code,),
+            )
+            row = cur.fetchone()
+            if not row or not row[2]:
+                raise PromoUnavailable("inactive", "That promo code isn't active.")
+            use = promo_repo.usage_in_cursor(cur, code, record["user_id"])
+            if use["used_by_user"] >= row[1]:
+                raise PromoUnavailable("already_used", "You've already used this promo code.")
+            if row[0] is not None and use["total_used"] >= row[0]:
+                raise PromoUnavailable("exhausted", "That promo code has been fully redeemed.")
+
         cur.execute(
             """
             INSERT INTO billing.payment_orders
                 (order_id, payment_id, user_id, product, amount_usd, amount_idr,
                  usd_idr_rate, status, payment_method, midtrans_transaction_id,
-                 customer_email, is_mock)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 customer_email, is_mock, promo_code, discount_usd, list_amount_usd)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING """ + _COLUMNS,
             (
                 record["order_id"],
@@ -103,6 +144,9 @@ def create(record: Dict[str, Any]) -> Dict[str, Any]:
                 record.get("transaction_id"),
                 record.get("customer_email"),
                 bool(record.get("is_mock", False)),
+                code,
+                record.get("discount_usd", 0) or 0,
+                record.get("list_amount_usd"),
             ),
         )
         return _row_to_record(cur.fetchone())

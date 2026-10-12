@@ -53,12 +53,14 @@ app.add_middleware(
 # import failure is fatal.
 try:
     from app.routes.payment import router as payment_router
+    from app.routes.promo import router as promo_router
     from app.routes.reporting import router as reporting_router
     from app.routes.wallet import router as wallet_router
 
     app.include_router(payment_router)
     app.include_router(wallet_router)
     app.include_router(reporting_router)
+    app.include_router(promo_router)
     logger.info("Payment, wallet and reporting routes registered")
 except Exception as e:
     logger.error("Could not import payment routes: %s", e)
