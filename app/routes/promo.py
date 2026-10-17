@@ -43,6 +43,10 @@ class GenerateRequest(BaseModel):
     )
     campaign: Optional[str] = Field(None, max_length=64)
     note: Optional[str] = Field(None, max_length=300)
+    # Who the code is for. With no custom code or prefix, the generated codes
+    # are prefixed from this so each one reads as belonging to its affiliate.
+    affiliate_name: Optional[str] = Field(None, max_length=120, description="Person")
+    affiliate_company: Optional[str] = Field(None, max_length=120, description="Company")
 
     @field_validator("discount_type")
     @classmethod
@@ -81,7 +85,12 @@ async def generate(req: GenerateRequest, admin: dict = Depends(require_admin)):
     if req.code and req.count != 1:
         raise HTTPException(status_code=400, detail="A custom code can only be created one at a time")
 
+    affiliate_name = (req.affiliate_name or "").strip() or None
+    affiliate_company = (req.affiliate_company or "").strip() or None
+
     prefix = ""
+    if not req.prefix and not req.code:
+        prefix = promo.affiliate_prefix(affiliate_name, affiliate_company)
     if req.prefix:
         prefix = req.prefix.strip().upper()
         try:
@@ -117,6 +126,8 @@ async def generate(req: GenerateRequest, admin: dict = Depends(require_admin)):
         "campaign": (req.campaign or "").strip() or None,
         "note": (req.note or "").strip() or None,
         "created_by": caller_user_id(admin),
+        "affiliate_name": affiliate_name,
+        "affiliate_company": affiliate_company,
     }
     created = promo_repo.insert_many([{**base, "code": c} for c in codes])
 
@@ -136,11 +147,12 @@ async def list_codes(
     search: Optional[str] = None,
     campaign: Optional[str] = None,
     status: Optional[str] = Query(None, pattern="^(active|inactive|expired|exhausted)$"),
+    affiliate: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
 ):
     rows, total = promo_repo.list_codes(
-        search=search, campaign=campaign, status=status,
+        search=search, campaign=campaign, status=status, affiliate=affiliate,
         limit=page_size, offset=(page - 1) * page_size,
     )
     return {
@@ -159,26 +171,54 @@ async def export_codes(
     _admin: dict = Depends(require_admin),
     campaign: Optional[str] = None,
     status: Optional[str] = Query(None, pattern="^(active|inactive|expired|exhausted)$"),
+    affiliate: Optional[str] = None,
 ):
-    """CSV of the codes matching the filter — the handoff for a batch to marketing."""
-    rows, _ = promo_repo.list_codes(campaign=campaign, status=status, limit=500)
+    """CSV of the codes matching the filter — the handoff for a batch to marketing,
+    and the per-code conversion figures for affiliate reporting."""
+    rows, _ = promo_repo.list_codes(
+        campaign=campaign, status=status, affiliate=affiliate, limit=500
+    )
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([
-        "code", "discount_type", "discount_value", "max_redemptions", "redeemed",
-        "per_user_limit", "valid_from", "expires_at", "active", "campaign", "note",
+        "code", "affiliate_company", "affiliate_name", "discount_type", "discount_value",
+        "max_redemptions", "redeemed", "per_user_limit", "valid_from", "expires_at",
+        "active", "campaign", "note", "applied_customers", "checkout_customers",
+        "paid_customers", "conversion_rate", "revenue_usd", "discount_given_usd",
     ])
     for r in rows:
         w.writerow([
-            r["code"], r["discount_type"], r["discount_value"], r["max_redemptions"] or "",
+            r["code"], r["affiliate_company"] or "", r["affiliate_name"] or "",
+            r["discount_type"], r["discount_value"], r["max_redemptions"] or "",
             r["redeemed"], r["per_user_limit"], r["valid_from"] or "", r["expires_at"] or "",
             "yes" if r["active"] else "no", r["campaign"] or "", r["note"] or "",
+            r["applied_users"], r["checkout_users"], r["paid_users"],
+            r["conversion_rate"], r["revenue_usd"], r["discount_given_usd"],
         ])
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="aivory-promo-codes.csv"'},
     )
+
+
+@router.get("/affiliates")
+async def list_affiliates(_admin: dict = Depends(require_admin)):
+    """Lead conversion per affiliate: customers who applied a code, started
+    checkout, paid, and the revenue those codes brought in."""
+    return {"success": True, "affiliates": promo_repo.affiliates()}
+
+
+@router.get("/{code}/leads")
+async def code_leads(code: str, _admin: dict = Depends(require_admin)):
+    """The customers behind one code, each at the furthest stage they reached."""
+    try:
+        norm = promo.normalize_code(code)
+    except promo.PromoError:
+        raise HTTPException(status_code=404, detail="Unknown promo code")
+    if not promo_repo.get(norm):
+        raise HTTPException(status_code=404, detail="Unknown promo code")
+    return {"success": True, "code": norm, "leads": promo_repo.leads(norm)}
 
 
 @router.patch("/{code}")

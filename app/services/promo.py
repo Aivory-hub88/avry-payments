@@ -158,3 +158,30 @@ def quote(raw_code: str, product: str, user_id: str) -> Quote:
 def generate_code(prefix: str = "", length: int = 8) -> str:
     body = "".join(secrets.choice(_ALPHABET) for _ in range(length))
     return f"{prefix}-{body}" if prefix else body
+
+
+# Legal-entity words that say nothing about who the affiliate is.
+_ENTITY_WORDS = {
+    "PT", "CV", "TBK", "UD", "PD", "FIRMA", "KOPERASI", "YAYASAN",
+    "LTD", "LLC", "INC", "CORP", "CO", "COMPANY", "GROUP", "THE",
+}
+AFFILIATE_PREFIX_MAX = 12
+
+
+def affiliate_prefix(name: Optional[str], company: Optional[str]) -> str:
+    """
+    A readable code prefix that identifies the affiliate, e.g.
+    "PT Distributor Nusantara" -> "DISTRIBUTORNU", "Budi Santoso" -> "BUDISANTOSO".
+
+    The company wins over the person, because a code is usually tracked per
+    company. Combined with the random suffix from `generate_code`, every code
+    is unique while still showing at a glance who it belongs to. Returns ""
+    when neither yields any usable letters.
+    """
+    for source in (company, name):
+        words = re.findall(r"[A-Z0-9]+", (source or "").upper())
+        words = [w for w in words if w not in _ENTITY_WORDS] or words
+        joined = "".join(words)[:AFFILIATE_PREFIX_MAX]
+        if len(joined) >= 2:
+            return joined
+    return ""
