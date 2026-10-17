@@ -339,7 +339,7 @@ def leads(code: str) -> List[Dict[str, Any]]:
         cur.execute(
             f"""
             WITH touched AS (
-                SELECT e.user_id, e.email, NULL::text AS product, e.created_at,
+                SELECT e.user_id, e.email, e.product, e.created_at,
                        NULL::numeric AS amount_usd, 'applied' AS stage, 1 AS rank
                 FROM billing.promo_code_events e WHERE e.code = %s
                 UNION ALL
