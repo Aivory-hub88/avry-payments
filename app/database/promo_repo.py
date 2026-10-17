@@ -25,8 +25,12 @@ from app.database import pg
 _COLUMNS = (
     "code, discount_type, discount_value, max_redemptions, per_user_limit, "
     "valid_from, expires_at, products, active, campaign, note, created_by, "
-    "created_at, updated_at"
+    "created_at, updated_at, affiliate_name, affiliate_company"
 )
+_N_COLUMNS = 16
+
+# An order the customer actually paid for (or that was granted manually).
+_PAID = "(o.status = 'paid' OR o.granted_at IS NOT NULL)"
 
 
 def _row(r: Tuple) -> Dict[str, Any]:
@@ -48,6 +52,8 @@ def _row(r: Tuple) -> Dict[str, Any]:
         "created_by": r[11],
         "created_at": iso(r[12]),
         "updated_at": iso(r[13]),
+        "affiliate_name": r[14],
+        "affiliate_company": r[15],
     }
 
 
@@ -115,8 +121,8 @@ def insert_many(rows: List[Dict[str, Any]]) -> List[str]:
                 INSERT INTO billing.promo_codes
                     (code, discount_type, discount_value, max_redemptions,
                      per_user_limit, valid_from, expires_at, products, active,
-                     campaign, note, created_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     campaign, note, created_by, affiliate_name, affiliate_company)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (code) DO NOTHING
                 RETURNING code
                 """,
@@ -125,7 +131,8 @@ def insert_many(rows: List[Dict[str, Any]]) -> List[str]:
                     r.get("max_redemptions"), r.get("per_user_limit", 1),
                     r.get("valid_from"), r.get("expires_at"), r.get("products"),
                     r.get("active", True), r.get("campaign"), r.get("note"),
-                    r.get("created_by"),
+                    r.get("created_by"), r.get("affiliate_name"),
+                    r.get("affiliate_company"),
                 ),
             )
             if cur.fetchone():
@@ -147,6 +154,7 @@ def list_codes(
     search: Optional[str] = None,
     campaign: Optional[str] = None,
     status: Optional[str] = None,
+    affiliate: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Tuple[List[Dict[str, Any]], int]:
@@ -160,11 +168,17 @@ def list_codes(
     where: List[str] = ["1=1"]
     params: List[Any] = []
     if search:
-        where.append("(c.code ILIKE %s OR c.note ILIKE %s OR c.campaign ILIKE %s)")
-        params.extend([f"%{search}%"] * 3)
+        where.append(
+            "(c.code ILIKE %s OR c.note ILIKE %s OR c.campaign ILIKE %s "
+            "OR c.affiliate_name ILIKE %s OR c.affiliate_company ILIKE %s)"
+        )
+        params.extend([f"%{search}%"] * 5)
     if campaign:
         where.append("c.campaign = %s")
         params.append(campaign)
+    if affiliate:
+        where.append("COALESCE(c.affiliate_company, c.affiliate_name) = %s")
+        params.append(affiliate)
 
     redeemed = (
         "(SELECT count(*) FROM billing.payment_orders o WHERE o.promo_code = c.code "
@@ -191,11 +205,12 @@ def list_codes(
         cur.execute(
             f"""
             SELECT {cols}, {redeemed} AS redeemed,
-                   COALESCE((SELECT sum(o.discount_usd) FROM billing.payment_orders o
-                             WHERE o.promo_code = c.code
-                               AND (o.status = 'paid' OR o.granted_at IS NOT NULL)), 0)
-                       AS discount_given_usd
+                   COALESCE(o.discount_given_usd, 0), COALESCE(o.revenue_usd, 0),
+                   COALESCE(e.applied_users, 0), COALESCE(o.checkout_users, 0),
+                   COALESCE(o.paid_users, 0)
             FROM billing.promo_codes c
+            LEFT JOIN LATERAL ({_ORDER_STATS} WHERE o.promo_code = c.code) o ON true
+            LEFT JOIN LATERAL ({_LEAD_STATS}) e ON true
             WHERE {clause}
             ORDER BY c.created_at DESC, c.code
             LIMIT %s OFFSET %s
@@ -204,11 +219,162 @@ def list_codes(
         )
         out = []
         for r in cur.fetchall():
-            d = _row(r[:14])
-            d["redeemed"] = int(r[14])
-            d["discount_given_usd"] = float(r[15])
+            d = _row(r[:_N_COLUMNS])
+            d["redeemed"] = int(r[_N_COLUMNS])
+            d.update(_funnel(r[_N_COLUMNS + 1:]))
             out.append(d)
     return out, total
+
+
+# Funnel per code. "Applied" counts every customer who used the code at all:
+# those who entered it at checkout, plus any who went straight to an order
+# without the preview, so it is never below checkout.
+_ORDER_STATS = f"""
+    SELECT sum(o.discount_usd) FILTER (WHERE {_PAID}) AS discount_given_usd,
+           sum(o.amount_usd)   FILTER (WHERE {_PAID}) AS revenue_usd,
+           count(DISTINCT o.user_id)                  AS checkout_users,
+           count(DISTINCT o.user_id) FILTER (WHERE {_PAID}) AS paid_users
+    FROM billing.payment_orders o
+"""
+_LEAD_STATS = """
+    SELECT count(*) AS applied_users FROM (
+        SELECT e.user_id FROM billing.promo_code_events e WHERE e.code = c.code
+        UNION
+        SELECT o2.user_id FROM billing.payment_orders o2 WHERE o2.promo_code = c.code
+    ) leads
+"""
+
+
+def _funnel(values) -> Dict[str, Any]:
+    discount, revenue, applied, checkout, paid = values
+    applied = int(applied)
+    return {
+        "discount_given_usd": float(discount),
+        "revenue_usd": float(revenue),
+        "applied_users": applied,
+        "checkout_users": int(checkout),
+        "paid_users": int(paid),
+        "conversion_rate": round(int(paid) / applied, 4) if applied else 0.0,
+    }
+
+
+def record_apply(
+    code: str, user_id: str, email: Optional[str], product: str,
+    valid: bool, reason: Optional[str],
+) -> None:
+    """Log that a customer applied an existing code. Never raises: tracking must
+    not be able to break checkout."""
+    try:
+        with pg.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO billing.promo_code_events
+                    (code, user_id, email, product, valid, reason)
+                SELECT %s, %s, %s, %s, %s, %s
+                WHERE EXISTS (SELECT 1 FROM billing.promo_codes WHERE code = %s)
+                """,
+                (code, user_id, email, product, valid, reason, code),
+            )
+    except Exception:  # pragma: no cover - best effort
+        import logging
+
+        logging.getLogger(__name__).warning("Could not record promo apply for %s", code, exc_info=True)
+
+
+def affiliates() -> List[Dict[str, Any]]:
+    """Lead conversion rolled up per affiliate (company, else person)."""
+    with pg.cursor(commit=False) as cur:
+        cur.execute(
+            f"""
+            WITH c AS (
+                SELECT code, COALESCE(affiliate_company, affiliate_name) AS affiliate,
+                       affiliate_name, affiliate_company
+                FROM billing.promo_codes
+                WHERE COALESCE(affiliate_company, affiliate_name) IS NOT NULL
+            )
+            SELECT c.affiliate,
+                   min(c.affiliate_company), string_agg(DISTINCT c.affiliate_name, ', '),
+                   count(DISTINCT c.code),
+                   COALESCE((SELECT sum(o.discount_usd) FILTER (WHERE {_PAID})
+                             FROM billing.payment_orders o
+                             WHERE o.promo_code IN (SELECT code FROM c c2 WHERE c2.affiliate = c.affiliate)), 0),
+                   COALESCE((SELECT sum(o.amount_usd) FILTER (WHERE {_PAID})
+                             FROM billing.payment_orders o
+                             WHERE o.promo_code IN (SELECT code FROM c c2 WHERE c2.affiliate = c.affiliate)), 0),
+                   (SELECT count(DISTINCT u) FROM (
+                        SELECT e.user_id AS u FROM billing.promo_code_events e
+                         WHERE e.code IN (SELECT code FROM c c2 WHERE c2.affiliate = c.affiliate)
+                        UNION
+                        SELECT o.user_id FROM billing.payment_orders o
+                         WHERE o.promo_code IN (SELECT code FROM c c2 WHERE c2.affiliate = c.affiliate)
+                    ) leads),
+                   (SELECT count(DISTINCT o.user_id) FROM billing.payment_orders o
+                     WHERE o.promo_code IN (SELECT code FROM c c2 WHERE c2.affiliate = c.affiliate)),
+                   (SELECT count(DISTINCT o.user_id) FILTER (WHERE {_PAID}) FROM billing.payment_orders o
+                     WHERE o.promo_code IN (SELECT code FROM c c2 WHERE c2.affiliate = c.affiliate))
+            FROM c
+            GROUP BY c.affiliate
+            ORDER BY c.affiliate
+            """
+        )
+        out = []
+        for r in cur.fetchall():
+            d = {
+                "affiliate": r[0],
+                "affiliate_company": r[1],
+                "affiliate_names": r[2],
+                "codes": int(r[3]),
+            }
+            d.update(_funnel(r[4:9]))
+            out.append(d)
+    return out
+
+
+def leads(code: str) -> List[Dict[str, Any]]:
+    """
+    Every customer who touched `code`, furthest funnel stage first: paid, then
+    checkout started, then applied only. One row per customer.
+    """
+    with pg.cursor(commit=False) as cur:
+        cur.execute(
+            f"""
+            WITH touched AS (
+                SELECT e.user_id, e.email, NULL::text AS product, e.created_at,
+                       NULL::numeric AS amount_usd, 'applied' AS stage, 1 AS rank
+                FROM billing.promo_code_events e WHERE e.code = %s
+                UNION ALL
+                SELECT o.user_id, o.customer_email, o.product, o.created_at, o.amount_usd,
+                       CASE WHEN {_PAID} THEN 'paid' ELSE 'checkout' END,
+                       CASE WHEN {_PAID} THEN 3 ELSE 2 END
+                FROM billing.payment_orders o WHERE o.promo_code = %s
+            ),
+            best AS (
+                SELECT DISTINCT ON (user_id) user_id, stage, rank, product, amount_usd
+                FROM touched ORDER BY user_id, rank DESC, created_at DESC
+            )
+            SELECT b.user_id,
+                   (SELECT t.email FROM touched t WHERE t.user_id = b.user_id AND t.email IS NOT NULL
+                     ORDER BY t.created_at DESC LIMIT 1),
+                   b.stage, b.product, b.amount_usd,
+                   (SELECT min(t.created_at) FROM touched t WHERE t.user_id = b.user_id),
+                   (SELECT max(t.created_at) FROM touched t WHERE t.user_id = b.user_id)
+            FROM best b
+            ORDER BY b.rank DESC, 7 DESC
+            """,
+            (code, code),
+        )
+        return [
+            {
+                "user_id": r[0],
+                "email": r[1],
+                "stage": r[2],
+                "product": r[3],
+                "amount_usd": float(r[4]) if r[4] is not None else None,
+                "first_seen_at": r[5].isoformat() if r[5] else None,
+                "last_seen_at": r[6].isoformat() if r[6] else None,
+            }
+            for r in cur.fetchall()
+        ]
 
 
 def campaigns() -> List[str]:

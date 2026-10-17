@@ -112,3 +112,26 @@ def test_generated_codes_are_valid_and_unambiguous():
         code = promo.generate_code("LAUNCH")
         assert promo.normalize_code(code) == code
         assert not set("01OIL") & set(code.split("-", 1)[1])
+
+
+@pytest.mark.parametrize(
+    "name,company,expected",
+    [
+        (None, "PT Distributor Nusantara", "DISTRIBUTORN"),
+        ("Budi Santoso", None, "BUDISANTOSO"),
+        ("Budi", "CV Maju Jaya", "MAJUJAYA"),
+        ("Rina", "  ", "RINA"),
+        (None, "PT", "PT"),          # only entity words: keep them rather than nothing
+        ("x", None, ""),             # too short to identify anyone
+        (None, None, ""),
+    ],
+)
+def test_affiliate_prefix(name, company, expected):
+    assert promo.affiliate_prefix(name, company) == expected
+
+
+def test_affiliate_prefix_yields_valid_codes():
+    prefix = promo.affiliate_prefix(None, "PT Sinar Mas Agro Resources & Technology Tbk")
+    code = promo.generate_code(prefix)
+    assert promo.normalize_code(code) == code
+    assert code.startswith("SINARMASAGRO-")

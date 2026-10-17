@@ -135,6 +135,31 @@ ALTER TABLE billing.payment_orders
 CREATE INDEX IF NOT EXISTS payment_orders_promo_idx
     ON billing.payment_orders (promo_code)
     WHERE promo_code IS NOT NULL;
+
+-- Who a code was issued to (an affiliate, reseller or partner), so lead
+-- conversion can be reported per affiliate rather than per code.
+ALTER TABLE billing.promo_codes
+    ADD COLUMN IF NOT EXISTS affiliate_name    TEXT,
+    ADD COLUMN IF NOT EXISTS affiliate_company TEXT;
+CREATE INDEX IF NOT EXISTS promo_codes_affiliate_idx
+    ON billing.promo_codes (affiliate_company, affiliate_name);
+
+-- Top of the funnel: a signed-in customer applied a code at checkout. Orders
+-- (the middle and bottom of the funnel) are already in payment_orders, so only
+-- the step that never reaches the ledger is recorded here. One row per apply;
+-- reports count distinct users.
+CREATE TABLE IF NOT EXISTS billing.promo_code_events (
+    id          BIGSERIAL PRIMARY KEY,
+    code        TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    email       TEXT,
+    product     TEXT,
+    valid       BOOLEAN NOT NULL,
+    reason      TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS promo_code_events_code_idx
+    ON billing.promo_code_events (code, created_at DESC);
 """
 
 

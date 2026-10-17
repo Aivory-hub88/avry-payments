@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import require_admin, require_auth
 from app.config import settings
-from app.database import payment_repo, promo_repo
+from app.database import payment_repo, pg, promo_repo
 from app.services import fx, pricing, promo, receipt_pdf
 from app.services.payment_gateway import midtrans_service
 from app.services.payment_validation import PaymentValidationService
@@ -289,10 +289,29 @@ async def validate_promo(request: PromoValidateRequest, caller: dict = Depends(r
     try:
         q = promo.quote(request.code, request.product, user_id)
     except promo.PromoError as e:
+        _track_apply(request, user_id, caller, False, e.reason)
         return {"success": False, "valid": False, "reason": e.reason, "error": e.message}
     except pricing.UnknownProduct as e:
+        _track_apply(request, user_id, caller, False, "not_applicable")
         return {"success": False, "valid": False, "reason": "not_applicable", "error": str(e)}
+    _track_apply(request, user_id, caller, True, None)
     return {"success": True, "valid": True, **q.public()}
+
+
+def _track_apply(request: "PromoValidateRequest", user_id: str, caller: dict,
+                 valid: bool, reason: Optional[str]) -> None:
+    """Record the top of the affiliate funnel: this customer entered this code.
+    Only codes that exist are recorded (see promo_repo.record_apply)."""
+    try:
+        code = promo.normalize_code(request.code)
+    except promo.PromoError:
+        return
+    if not pg.is_configured():
+        return
+    promo_repo.record_apply(
+        code, user_id, caller.get("email"),
+        pricing.canonical_product(request.product), valid, reason,
+    )
 
 
 @router.post("/midtrans/create", response_model=CreateTransactionResponse)
