@@ -135,3 +135,17 @@ def test_affiliate_prefix_yields_valid_codes():
     code = promo.generate_code(prefix)
     assert promo.normalize_code(code) == code
     assert code.startswith("SINARMASAGRO-")
+
+
+def test_annual_operating_plan_prices():
+    assert pricing.resolve_price_usd("operational_annual") == 240.0
+    assert pricing.resolve_price_usd("business_annual") == 1188.0
+    assert pricing.product_name("business_annual") == "Business Plan (Annual)"
+    assert "operational_annual" in pricing.public_catalogue()
+
+
+def test_promo_can_target_annual_plans_only():
+    annual_only = _promo(products=["operational_annual", "business_annual"])
+    assert promo.evaluate(annual_only, "business_annual", 1188.0, FRESH, NOW) == 237.6
+    with pytest.raises(promo.PromoError):
+        promo.evaluate(annual_only, "business", 99.0, FRESH, NOW)
