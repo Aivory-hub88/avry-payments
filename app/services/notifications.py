@@ -345,6 +345,65 @@ def _promo_pairs(promo: Dict[str, Any]) -> list:
     return pairs
 
 
+async def _partner_conversion_email(promo: Dict[str, Any], label: str) -> int:
+    """
+    Tell the distributor partner a code of theirs just converted. Only codes
+    linked to a partner account (affiliate_partner_id) are reported, and only
+    to that distributor's active partner logins. Carries no buyer identity —
+    the code, the product, and the running customer counts. Returns how many
+    emails were sent; never raises.
+    """
+    partner_id = promo.get("affiliate_partner_id")
+    if not partner_id:
+        return 0
+    try:
+        from app.database import promo_repo
+
+        recipients = promo_repo.partner_emails(partner_id)
+    except Exception as e:
+        logger.warning("Could not look up partner emails for %s: %s", partner_id, e)
+        return 0
+    if not recipients:
+        return 0
+
+    code = promo["code"]
+    aff = promo.get("affiliate") or {}
+    used = _customers_label(promo)
+    total = aff.get("customers")
+    total_line = (
+        f"Across all {aff.get('codes')} of your codes: {total} paying customer"
+        f"{'s' if total != 1 else ''}."
+        if total is not None and aff.get("codes")
+        else ""
+    )
+    subject = f"Your Aivory code {code} was just used"
+    text = (
+        f"Good news — a customer just bought {label} with your promo code {code}.\n\n"
+        f"{code} has now been used by {used}.\n"
+        + (f"{total_line}\n" if total_line else "")
+        + "\nThis is an automated message from Aivory."
+    )
+    esc = html_lib.escape
+    html = f"""\
+<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+            max-width:560px;margin:0 auto;color:#111827;line-height:1.5">
+  <h2 style="margin:0 0 12px;font-size:18px">Your code {esc(code)} was just used</h2>
+  <p style="margin:0 0 16px">A customer just bought <strong>{esc(label)}</strong>
+     with your promo code <strong style="font-family:monospace">{esc(code)}</strong>.</p>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+    <tr><td style="padding:6px 0;color:#6b7280">This code</td>
+        <td style="padding:6px 0;text-align:right;font-weight:600">{esc(used)}</td></tr>
+    {"" if not total_line else f'<tr><td style="padding:6px 0;color:#6b7280">All your codes</td><td style="padding:6px 0;text-align:right;font-weight:600">{total} paying customer{"s" if total != 1 else ""}</td></tr>'}
+  </table>
+  <p style="margin:20px 0 0;padding-top:12px;border-top:1px solid #e5e7eb;
+            color:#9ca3af;font-size:12px">
+    Aivory AI · automated partner update.
+  </p>
+</div>"""
+    results = await asyncio.gather(*(_send_email(addr, subject, html, text) for addr in recipients))
+    return sum(1 for ok in results if ok)
+
+
 def _promo_lines(promo: Dict[str, Any]) -> list:
     return [f"{k}: {v}" for k, v in _promo_pairs(promo)]
 
@@ -453,6 +512,10 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
         payment_type=record_.get("payment_type"),
         promo=promo,
     )
+
+    # The distributor partner whose code this was, if it is linked to one.
+    if promo:
+        await _partner_conversion_email(promo, label)
 
     # Admin Telegram ping
     promo_text = ""

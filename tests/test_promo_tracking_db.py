@@ -281,3 +281,69 @@ def test_order_without_promo_sends_no_promo_notification(repo, monkeypatch):
     with pg.cursor(commit=False) as cur:
         cur.execute("SELECT count(*) FROM billing.notifications WHERE type = 'promo_conversion'")
         assert cur.fetchone()[0] == 0
+
+
+def test_partner_gets_conversion_email_without_buyer_identity(repo, monkeypatch):
+    import asyncio
+
+    promo_repo, pg = repo
+    from app.services import notifications
+
+    with pg.cursor() as cur:
+        cur.execute("CREATE SCHEMA IF NOT EXISTS identity")
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS identity.users (id TEXT PRIMARY KEY, email TEXT, "
+            "account_type TEXT, is_active BOOLEAN, company_name TEXT)"
+        )
+        cur.execute("TRUNCATE identity.users, billing.notifications")
+        cur.execute(
+            "INSERT INTO identity.users VALUES "
+            "('p1','ops@nusa.co.id','partner',true,'PT Nusa'),"
+            "('p2','Sales@Nusa.co.id','partner',true,'pt nusa'),"      # second login, same distributor
+            "('p3','old@nusa.co.id','partner',false,'PT Nusa'),"       # suspended
+            "('p4','x@other.id','partner',true,'PT Other'),"           # different distributor
+            "('c1','buyer@customer.id','paid',true,'PT Nusa')"         # not a partner
+        )
+    promo_repo.insert_many([
+        {"code": "NUSA-P", "discount_type": "percent", "discount_value": 10, "per_user_limit": 1,
+         "max_customers": 10, "affiliate_company": "PT Nusa", "affiliate_partner_id": "p1"},
+        {"code": "PLAIN-X", "discount_type": "percent", "discount_value": 10, "per_user_limit": 1},
+    ])
+    with pg.cursor() as cur:
+        _order(cur, 1, "c1", "NUSA-P", "paid", email="buyer@customer.id")
+
+    sent = []
+
+    async def fake_email(to, subject, html, text):
+        sent.append((to, subject, html, text))
+        return True
+
+    async def ok(*a, **k):
+        return True
+
+    monkeypatch.setattr(notifications, "_send_email", fake_email)
+    monkeypatch.setattr(notifications, "_telegram_admin", ok)
+    monkeypatch.setattr(notifications, "_send_receipt", ok)
+
+    asyncio.run(notifications.payment_settled({
+        "order_id": "o1", "user_id": "c1", "product": "business", "amount": 89.1,
+        "customer_email": "buyer@customer.id", "promo_code": "NUSA-P", "discount_usd": 9.9,
+    }, "settled"))
+
+    partner = [s for s in sent if s[1] == "Your Aivory code NUSA-P was just used"]
+    assert sorted(s[0] for s in partner) == ["ops@nusa.co.id", "sales@nusa.co.id"]
+    to, subject, html, text = partner[0]
+    assert "1 of 10 customers (9 left)" in text
+    assert "Across all 1 of your codes: 1 paying customer." in text
+    assert "buyer@customer.id" not in text and "buyer@customer.id" not in html
+    assert "c1" not in text
+
+    # A code not linked to a partner emails no partner.
+    sent.clear()
+    with pg.cursor() as cur:
+        _order(cur, 2, "c2", "PLAIN-X", "paid")
+    asyncio.run(notifications.payment_settled({
+        "order_id": "o2", "user_id": "c2", "product": "business", "amount": 89.1,
+        "promo_code": "PLAIN-X",
+    }, "settled"))
+    assert not [s for s in sent if "was just used" in s[1]]

@@ -397,6 +397,34 @@ def conversion_snapshot(code: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def partner_emails(partner_id: Optional[str]) -> List[str]:
+    """
+    Where to tell a distributor partner about its codes: every active partner
+    login of the same distributor — the linked account plus any others with
+    the same company (the admin dashboard's "Add Email"). Reads avry-backend's
+    identity.users, which lives in the same database. Empty when the account
+    is gone, suspended, or no longer a partner.
+    """
+    if not partner_id:
+        return []
+    with pg.cursor(commit=False) as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT lower(u.email)
+            FROM identity.users p
+            JOIN identity.users u
+              ON u.account_type = 'partner' AND u.is_active
+             AND (u.id = p.id OR (p.company_name IS NOT NULL
+                                  AND lower(u.company_name) = lower(p.company_name)))
+            WHERE p.id = %s AND p.account_type = 'partner'
+              AND u.email IS NOT NULL
+            ORDER BY 1
+            """,
+            (partner_id,),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 def affiliates() -> List[Dict[str, Any]]:
     """Lead conversion rolled up per affiliate (company, else person)."""
     with pg.cursor(commit=False) as cur:
