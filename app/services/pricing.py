@@ -47,6 +47,18 @@ FIXED_PRICES_USD: Dict[str, int] = {
     "business": 99,
 }
 
+# Annual billing for the Operating Plan: twelve months paid up front, at the
+# monthly price times twelve (no annual discount). Derived rather than typed so
+# the two can never drift apart; avry-backend grants these 365 days of the same
+# tier (`ANNUAL_PRODUCTS` in routes/entitlements.py).
+ANNUAL_BILLING_MONTHS = 12
+ANNUAL_PRODUCTS: Dict[str, str] = {
+    "operational_annual": "operational",
+    "business_annual": "business",
+}
+for _annual, _monthly in ANNUAL_PRODUCTS.items():
+    FIXED_PRICES_USD[_annual] = FIXED_PRICES_USD[_monthly] * ANNUAL_BILLING_MONTHS
+
 # Credit top-up packs, in USD, keyed by the credits granted.
 #
 # These are the prices the dashboard's credit marketplace puts in front of the
@@ -104,6 +116,8 @@ PRODUCT_NAMES: Dict[str, str] = {
     "ai_fullstack": "Complete Transformation Package",
     "operational": "Operational Plan",
     "business": "Business Plan",
+    "operational_annual": "Operational Plan (Annual)",
+    "business_annual": "Business Plan (Annual)",
 }
 
 
