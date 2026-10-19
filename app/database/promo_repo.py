@@ -25,9 +25,10 @@ from app.database import pg
 _COLUMNS = (
     "code, discount_type, discount_value, max_redemptions, per_user_limit, "
     "valid_from, expires_at, products, active, campaign, note, created_by, "
-    "created_at, updated_at, affiliate_name, affiliate_company, max_customers"
+    "created_at, updated_at, affiliate_name, affiliate_company, max_customers, "
+    "affiliate_partner_id, created_by_email"
 )
-_N_COLUMNS = 17
+_N_COLUMNS = 19
 
 # An order the customer actually paid for (or that was granted manually).
 _PAID = "(o.status = 'paid' OR o.granted_at IS NOT NULL)"
@@ -55,6 +56,8 @@ def _row(r: Tuple) -> Dict[str, Any]:
         "affiliate_name": r[14],
         "affiliate_company": r[15],
         "max_customers": r[16],
+        "affiliate_partner_id": r[17],
+        "created_by_email": r[18],
     }
 
 
@@ -145,8 +148,8 @@ def insert_many(rows: List[Dict[str, Any]]) -> List[str]:
                     (code, discount_type, discount_value, max_redemptions,
                      per_user_limit, valid_from, expires_at, products, active,
                      campaign, note, created_by, affiliate_name, affiliate_company,
-                     max_customers)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     max_customers, affiliate_partner_id, created_by_email)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (code) DO NOTHING
                 RETURNING code
                 """,
@@ -157,11 +160,39 @@ def insert_many(rows: List[Dict[str, Any]]) -> List[str]:
                     r.get("active", True), r.get("campaign"), r.get("note"),
                     r.get("created_by"), r.get("affiliate_name"),
                     r.get("affiliate_company"), r.get("max_customers"),
+                    r.get("affiliate_partner_id"), r.get("created_by_email"),
                 ),
             )
             if cur.fetchone():
                 created.append(r["code"])
     return created
+
+
+def canonical_affiliate(column: str, value: Optional[str]) -> Optional[str]:
+    """
+    The spelling already on record for the affiliate `value` names, else
+    `value` itself. Matching uses promo.affiliate_key, so a retyped name with
+    different case, spacing or "PT"/"Tbk" joins the existing affiliate rather
+    than splitting its numbers. The oldest spelling wins.
+    """
+    if not value:
+        return value
+    if column not in ("affiliate_company", "affiliate_name"):
+        raise ValueError(column)
+    from app.services.promo import affiliate_key
+
+    key = affiliate_key(value)
+    if not key:
+        return value
+    with pg.cursor(commit=False) as cur:
+        cur.execute(
+            f"SELECT {column} FROM billing.promo_codes WHERE {column} IS NOT NULL "
+            f"GROUP BY {column} ORDER BY min(created_at)"
+        )
+        for (existing,) in cur.fetchall():
+            if affiliate_key(existing) == key:
+                return existing
+    return value
 
 
 def set_active(code: str, active: bool) -> bool:
@@ -322,12 +353,13 @@ def affiliates() -> List[Dict[str, Any]]:
             f"""
             WITH c AS (
                 SELECT code, COALESCE(affiliate_company, affiliate_name) AS affiliate,
-                       affiliate_name, affiliate_company
+                       affiliate_name, affiliate_company, affiliate_partner_id
                 FROM billing.promo_codes
                 WHERE COALESCE(affiliate_company, affiliate_name) IS NOT NULL
             )
             SELECT c.affiliate,
                    min(c.affiliate_company), string_agg(DISTINCT c.affiliate_name, ', '),
+                   min(c.affiliate_partner_id),
                    count(DISTINCT c.code),
                    COALESCE((SELECT sum(o.discount_usd) FILTER (WHERE {_PAID})
                              FROM billing.payment_orders o
@@ -357,9 +389,10 @@ def affiliates() -> List[Dict[str, Any]]:
                 "affiliate": r[0],
                 "affiliate_company": r[1],
                 "affiliate_names": r[2],
-                "codes": int(r[3]),
+                "affiliate_partner_id": r[3],
+                "codes": int(r[4]),
             }
-            d.update(_funnel(r[4:9]))
+            d.update(_funnel(r[5:10]))
             out.append(d)
     return out
 

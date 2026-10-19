@@ -168,3 +168,33 @@ def test_customer_limit_is_enforced_when_the_order_is_created(repo):
     rows, _ = promo_repo.list_codes(search="TEAM-2")
     assert rows[0]["max_customers"] == 2
     assert promo_repo.usage("TEAM-2", "c")["other_customers"] == 2
+
+
+def test_retyped_affiliate_joins_the_existing_one_and_creator_is_recorded(repo):
+    promo_repo, _ = repo
+    admin = _client({"user_id": "adm1", "email": "ops@aivory.id", "account_type": "superadmin"})
+    gen = "/api/v1/payments/promo/admin/generate"
+    first = admin.post(gen, json={
+        "discount_type": "percent", "discount_value": 10,
+        "affiliate_company": "PT Distributor Nusantara", "affiliate_partner_id": "user_partner_1",
+    }).json()
+    second = admin.post(gen, json={
+        "discount_type": "percent", "discount_value": 10, "count": 2,
+        "affiliate_company": "distributor  nusantara tbk",
+    }).json()
+    other = admin.post(gen, json={
+        "discount_type": "percent", "discount_value": 10, "affiliate_company": "PT Distributor Jaya",
+    }).json()
+
+    assert second["affiliate_company"] == "PT Distributor Nusantara"
+    assert all(c.startswith("DISTRIBUTORN-") for c in second["codes"])
+    assert other["affiliate_company"] == "PT Distributor Jaya"
+
+    row = promo_repo.get(first["codes"][0])
+    assert row["affiliate_partner_id"] == "user_partner_1"
+    assert row["created_by"] == "adm1" and row["created_by_email"] == "ops@aivory.id"
+
+    by_name = {a["affiliate"]: a for a in promo_repo.affiliates()}
+    assert set(by_name) == {"PT Distributor Nusantara", "PT Distributor Jaya"}
+    assert by_name["PT Distributor Nusantara"]["codes"] == 3
+    assert by_name["PT Distributor Nusantara"]["affiliate_partner_id"] == "user_partner_1"

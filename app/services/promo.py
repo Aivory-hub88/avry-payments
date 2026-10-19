@@ -181,6 +181,18 @@ _ENTITY_WORDS = {
 AFFILIATE_PREFIX_MAX = 12
 
 
+def affiliate_key(value: Optional[str]) -> str:
+    """
+    What makes two affiliate names the same affiliate: letters and digits only,
+    legal-entity words dropped, case ignored. "PT Distributor Nusantara",
+    "distributor nusantara" and "Distributor Nusantara Tbk" share a key, so
+    they are reported as one affiliate instead of three.
+    """
+    words = re.findall(r"[A-Z0-9]+", (value or "").upper())
+    meaningful = [w for w in words if w not in _ENTITY_WORDS] or words
+    return "".join(meaningful).lower()
+
+
 def affiliate_prefix(name: Optional[str], company: Optional[str]) -> str:
     """
     A readable code prefix that identifies the affiliate, e.g.

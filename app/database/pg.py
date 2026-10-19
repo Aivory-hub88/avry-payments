@@ -148,6 +148,12 @@ ALTER TABLE billing.promo_codes
 ALTER TABLE billing.promo_codes
     ADD COLUMN IF NOT EXISTS affiliate_name    TEXT,
     ADD COLUMN IF NOT EXISTS affiliate_company TEXT;
+-- The partner account (avry-backend identity.users id) a code was issued
+-- to, when the affiliate is one of our distributor partners; and the email
+-- of the admin who created the code (created_by holds only their user id).
+ALTER TABLE billing.promo_codes
+    ADD COLUMN IF NOT EXISTS affiliate_partner_id TEXT,
+    ADD COLUMN IF NOT EXISTS created_by_email     TEXT;
 CREATE INDEX IF NOT EXISTS promo_codes_affiliate_idx
     ON billing.promo_codes (affiliate_company, affiliate_name);
 

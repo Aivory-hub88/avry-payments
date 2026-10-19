@@ -167,3 +167,19 @@ def test_customer_limit_blocks_only_new_customers():
     room = {"total_used": 1, "spent": 1, "used_by_user": 0,
             "other_customers": 1, "caller_is_customer": False}
     assert promo.evaluate(capped, "business", 99.0, room, NOW) == 19.8
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("PT Distributor Nusantara", "distributor nusantara"),
+        ("PT Distributor Nusantara", "Distributor  Nusantara Tbk"),
+        ("CV Maju-Jaya", "maju jaya"),
+    ],
+)
+def test_affiliate_key_matches_retyped_names(a, b):
+    assert promo.affiliate_key(a) == promo.affiliate_key(b)
+
+
+def test_affiliate_key_keeps_different_affiliates_apart():
+    assert promo.affiliate_key("PT Distributor Nusantara") != promo.affiliate_key("PT Distributor Jaya")
