@@ -35,6 +35,9 @@ class GenerateRequest(BaseModel):
     code: Optional[str] = Field(None, max_length=32)
     prefix: Optional[str] = Field(None, max_length=16, description="e.g. LAUNCH → LAUNCH-K7M2Q9XA")
     max_redemptions: Optional[int] = Field(None, ge=1, description="Per code; blank = unlimited")
+    max_customers: Optional[int] = Field(
+        None, ge=1, description="Different customers who may use each code; blank = unlimited"
+    )
     per_user_limit: int = Field(1, ge=1, le=100)
     valid_from: Optional[datetime] = None
     expires_at: Optional[datetime] = None
@@ -119,6 +122,7 @@ async def generate(req: GenerateRequest, admin: dict = Depends(require_admin)):
         "discount_type": req.discount_type,
         "discount_value": round(req.discount_value, 2),
         "max_redemptions": req.max_redemptions,
+        "max_customers": req.max_customers,
         "per_user_limit": req.per_user_limit,
         "valid_from": req.valid_from,
         "expires_at": req.expires_at,
@@ -182,14 +186,15 @@ async def export_codes(
     w = csv.writer(buf)
     w.writerow([
         "code", "affiliate_company", "affiliate_name", "discount_type", "discount_value",
-        "max_redemptions", "redeemed", "per_user_limit", "valid_from", "expires_at",
+        "max_customers", "customers_used", "max_redemptions", "redeemed", "per_user_limit", "valid_from", "expires_at",
         "active", "campaign", "note", "applied_customers", "checkout_customers",
         "paid_customers", "conversion_rate", "revenue_usd", "discount_given_usd",
     ])
     for r in rows:
         w.writerow([
             r["code"], r["affiliate_company"] or "", r["affiliate_name"] or "",
-            r["discount_type"], r["discount_value"], r["max_redemptions"] or "",
+            r["discount_type"], r["discount_value"], r["max_customers"] or "",
+            r["customers_used"], r["max_redemptions"] or "",
             r["redeemed"], r["per_user_limit"], r["valid_from"] or "", r["expires_at"] or "",
             "yes" if r["active"] else "no", r["campaign"] or "", r["note"] or "",
             r["applied_users"], r["checkout_users"], r["paid_users"],

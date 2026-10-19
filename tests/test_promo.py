@@ -149,3 +149,21 @@ def test_promo_can_target_annual_plans_only():
     assert promo.evaluate(annual_only, "business_annual", 1188.0, FRESH, NOW) == 237.6
     with pytest.raises(promo.PromoError):
         promo.evaluate(annual_only, "business", 99.0, FRESH, NOW)
+
+
+def test_customer_limit_blocks_only_new_customers():
+    capped = _promo(max_customers=2, per_user_limit=3)
+    full_new = {"total_used": 4, "spent": 4, "used_by_user": 0,
+                "other_customers": 2, "caller_is_customer": False}
+    with pytest.raises(promo.PromoError) as e:
+        promo.evaluate(capped, "business", 99.0, full_new, NOW)
+    assert e.value.reason == "exhausted"
+
+    # One of the two customers using it again is still within per_user_limit.
+    returning = {"total_used": 4, "spent": 4, "used_by_user": 2,
+                 "other_customers": 1, "caller_is_customer": True}
+    assert promo.evaluate(capped, "business", 99.0, returning, NOW) == 19.8
+
+    room = {"total_used": 1, "spent": 1, "used_by_user": 0,
+            "other_customers": 1, "caller_is_customer": False}
+    assert promo.evaluate(capped, "business", 99.0, room, NOW) == 19.8

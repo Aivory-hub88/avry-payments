@@ -108,9 +108,11 @@ def create(record: Dict[str, Any]) -> Dict[str, Any]:
     with pg.cursor() as cur:
         if code:
             from app.database import promo_repo
+            from app.services.promo import customer_cap_reached
 
             cur.execute(
-                "SELECT max_redemptions, per_user_limit, active FROM billing.promo_codes "
+                "SELECT max_redemptions, per_user_limit, active, max_customers "
+                "FROM billing.promo_codes "
                 "WHERE code = %s FOR UPDATE",
                 (code,),
             )
@@ -121,6 +123,8 @@ def create(record: Dict[str, Any]) -> Dict[str, Any]:
             if use["used_by_user"] >= row[1]:
                 raise PromoUnavailable("already_used", "You've already used this promo code.")
             if row[0] is not None and use["total_used"] >= row[0]:
+                raise PromoUnavailable("exhausted", "That promo code has been fully redeemed.")
+            if customer_cap_reached(row[3], use):
                 raise PromoUnavailable("exhausted", "That promo code has been fully redeemed.")
 
         cur.execute(

@@ -136,6 +136,13 @@ CREATE INDEX IF NOT EXISTS payment_orders_promo_idx
     ON billing.payment_orders (promo_code)
     WHERE promo_code IS NOT NULL;
 
+-- How many different customers may use a code (NULL = unlimited). Distinct
+-- from max_redemptions, which counts uses: with per_user_limit > 1 the two
+-- differ. Enforced like max_redemptions, under the code's row lock.
+ALTER TABLE billing.promo_codes
+    ADD COLUMN IF NOT EXISTS max_customers INTEGER
+        CHECK (max_customers IS NULL OR max_customers > 0);
+
 -- Who a code was issued to (an affiliate, reseller or partner), so lead
 -- conversion can be reported per affiliate rather than per code.
 ALTER TABLE billing.promo_codes

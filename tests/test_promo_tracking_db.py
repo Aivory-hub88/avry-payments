@@ -137,3 +137,34 @@ def test_generate_prefixes_from_affiliate_and_apply_is_tracked(repo, monkeypatch
     aff = admin.get("/api/v1/payments/promo/admin/affiliates").json()["affiliates"]
     assert aff[0]["affiliate"] == "PT Distributor Nusantara" and aff[0]["applied_users"] == 1
     assert admin.get("/api/v1/payments/promo/admin/NOPE-1234/leads").status_code == 404
+
+
+def test_customer_limit_is_enforced_when_the_order_is_created(repo):
+    promo_repo, pg = repo
+    from app.database import payment_repo
+
+    promo_repo.insert_many([{
+        "code": "TEAM-2", "discount_type": "percent", "discount_value": 20,
+        "per_user_limit": 2, "max_customers": 2,
+    }])
+
+    def order(n, user):
+        return payment_repo.create({
+            "order_id": f"t{n}", "payment_id": f"tp{n}", "user_id": user,
+            "product": "business", "amount": 79.2, "amount_idr": 1267200,
+            "usd_idr_rate": 16000, "status": "pending", "payment_method": "midtrans",
+            "midtrans_transaction_id": None, "customer_email": f"{user}@x.id",
+            "is_mock": False, "promo_code": "TEAM-2", "discount_usd": 19.8,
+            "list_amount_usd": 99,
+        })
+
+    order(1, "a")
+    order(2, "b")               # second customer takes the last slot
+    with pytest.raises(payment_repo.PromoUnavailable) as e:
+        order(3, "c")           # a third customer is refused
+    assert e.value.reason == "exhausted"
+    order(4, "a")               # an existing customer may use it again
+
+    rows, _ = promo_repo.list_codes(search="TEAM-2")
+    assert rows[0]["max_customers"] == 2
+    assert promo_repo.usage("TEAM-2", "c")["other_customers"] == 2
