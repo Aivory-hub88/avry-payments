@@ -198,3 +198,86 @@ def test_retyped_affiliate_joins_the_existing_one_and_creator_is_recorded(repo):
     assert set(by_name) == {"PT Distributor Nusantara", "PT Distributor Jaya"}
     assert by_name["PT Distributor Nusantara"]["codes"] == 3
     assert by_name["PT Distributor Nusantara"]["affiliate_partner_id"] == "user_partner_1"
+
+
+def test_settled_promo_order_notifies_admins_with_customer_counts(repo, monkeypatch):
+    import asyncio
+
+    promo_repo, pg = repo
+    from app.services import notifications
+
+    with pg.cursor() as cur:
+        cur.execute("TRUNCATE billing.notifications")
+    promo_repo.insert_many([
+        {"code": "NUSA-1", "discount_type": "percent", "discount_value": 20,
+         "per_user_limit": 1, "max_customers": 20, "affiliate_company": "PT Nusa & Co"},
+        {"code": "NUSA-2", "discount_type": "percent", "discount_value": 20,
+         "per_user_limit": 1, "affiliate_company": "PT Nusa & Co"},
+    ])
+    with pg.cursor() as cur:
+        _order(cur, 1, "u1", "NUSA-1", "paid", email="u1@x.id")
+        _order(cur, 2, "u2", "NUSA-1", "pending")          # not a conversion yet
+        _order(cur, 3, "u3", "NUSA-2", "paid", amount=50.0)
+
+    sent = {"emails": [], "telegram": []}
+
+    async def fake_email(to, subject, html, text):
+        sent["emails"].append((subject, html, text))
+        return True
+
+    async def fake_telegram(text):
+        sent["telegram"].append(text)
+        return True
+
+    async def no_receipt(*a, **k):
+        return True
+
+    monkeypatch.setattr(notifications, "_send_email", fake_email)
+    monkeypatch.setattr(notifications, "_telegram_admin", fake_telegram)
+    monkeypatch.setattr(notifications, "_send_receipt", no_receipt)
+
+    record = {
+        "order_id": "o1", "user_id": "u1", "product": "business", "amount": 80.0,
+        "amount_idr": 1280000, "customer_email": "u1@x.id", "promo_code": "NUSA-1",
+        "discount_usd": 19.0,
+    }
+    asyncio.run(notifications.payment_settled(record, "settled"))
+
+    with pg.cursor(commit=False) as cur:
+        cur.execute(
+            "SELECT title, body, meta FROM billing.notifications "
+            "WHERE audience = 'admin' AND type = 'promo_conversion'"
+        )
+        (title, body, meta), = cur.fetchall()
+    assert title == "Promo conversion — NUSA-1 (PT Nusa & Co)"
+    assert "1 of 20 customers (19 left)" in body
+    assert "PT Nusa & Co: 2 paying customers, $130.00 across 2 codes" in body
+    assert meta["promo_customers"] == 1 and meta["promo_max_customers"] == 20
+
+    subject, html, text = sent["emails"][0]
+    assert subject.endswith("· promo NUSA-1")
+    assert "Code used by: 1 of 20 customers (19 left)" in text
+    assert "PT Nusa &amp; Co" in html and "PT Nusa & Co" not in html
+    assert "1 of 20 customers" in sent["telegram"][0] and "Nusa &amp; Co" in sent["telegram"][0]
+
+
+def test_order_without_promo_sends_no_promo_notification(repo, monkeypatch):
+    import asyncio
+
+    _, pg = repo
+    from app.services import notifications
+
+    with pg.cursor() as cur:
+        cur.execute("TRUNCATE billing.notifications")
+
+    async def ok(*a, **k):
+        return True
+
+    for name in ("_send_email", "_telegram_admin", "_send_receipt"):
+        monkeypatch.setattr(notifications, name, ok)
+    asyncio.run(notifications.payment_settled(
+        {"order_id": "o9", "user_id": "u9", "product": "business", "amount": 99.0}, "settled"
+    ))
+    with pg.cursor(commit=False) as cur:
+        cur.execute("SELECT count(*) FROM billing.notifications WHERE type = 'promo_conversion'")
+        assert cur.fetchone()[0] == 0
