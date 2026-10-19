@@ -346,6 +346,57 @@ def record_apply(
         logging.getLogger(__name__).warning("Could not record promo apply for %s", code, exc_info=True)
 
 
+def conversion_snapshot(code: str) -> Optional[Dict[str, Any]]:
+    """
+    Where a code stands right after one of its orders settles: how many
+    different customers have now paid with it (against its customer limit),
+    and the same totals for its whole affiliate. None for an unknown code.
+    """
+    promo = get(code)
+    if not promo:
+        return None
+    affiliate = promo.get("affiliate_company") or promo.get("affiliate_name")
+    with pg.cursor(commit=False) as cur:
+        cur.execute(
+            f"""
+            SELECT count(DISTINCT o.user_id), count(*), COALESCE(sum(o.amount_usd), 0)
+            FROM billing.payment_orders o
+            WHERE o.promo_code = %s AND {_PAID}
+            """,
+            (code,),
+        )
+        customers, orders, revenue = cur.fetchone()
+        aff = None
+        if affiliate:
+            cur.execute(
+                f"""
+                SELECT count(DISTINCT o.user_id), COALESCE(sum(o.amount_usd), 0),
+                       count(DISTINCT c.code)
+                FROM billing.promo_codes c
+                LEFT JOIN billing.payment_orders o
+                       ON o.promo_code = c.code AND {_PAID}
+                WHERE COALESCE(c.affiliate_company, c.affiliate_name) = %s
+                """,
+                (affiliate,),
+            )
+            a_customers, a_revenue, a_codes = cur.fetchone()
+            aff = {
+                "name": affiliate,
+                "customers": int(a_customers),
+                "revenue_usd": float(a_revenue),
+                "codes": int(a_codes),
+            }
+    return {
+        "code": code,
+        "customers": int(customers),
+        "orders": int(orders),
+        "revenue_usd": float(revenue),
+        "max_customers": promo.get("max_customers"),
+        "affiliate": aff,
+        "affiliate_partner_id": promo.get("affiliate_partner_id"),
+    }
+
+
 def affiliates() -> List[Dict[str, Any]]:
     """Lead conversion rolled up per affiliate (company, else person)."""
     with pg.cursor(commit=False) as cur:

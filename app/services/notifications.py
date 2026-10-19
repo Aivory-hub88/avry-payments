@@ -24,6 +24,7 @@ must stay paid even if the mail server is down.
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import json
 import logging
 from typing import Any, Dict, Optional
@@ -213,9 +214,12 @@ async def _admin_alert_email(
     user_id: str,
     email: Optional[str],
     payment_type: Optional[str],
+    promo: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Email the fixed admin list that a payment came in. Never raises."""
     subject = f"Payment received — {label} ({_format_idr(amount_idr)})"
+    if promo:
+        subject += f" · promo {promo['code']}"
     method = payment_type or "midtrans"
     user_id_display = user_id or "unknown user"
     email_display = email or "no email on file"
@@ -228,6 +232,14 @@ async def _admin_alert_email(
         f"Method: {method}\n"
         f"Order: {order_id}\n"
     )
+    promo_rows = ""
+    if promo:
+        text += "\n" + "\n".join(_promo_lines(promo)) + "\n"
+        promo_rows = "".join(
+            f'<tr><td style="padding:6px 0;color:#6b7280">{html_lib.escape(k)}</td>'
+            f'<td style="padding:6px 0;text-align:right">{html_lib.escape(v)}</td></tr>'
+            for k, v in _promo_pairs(promo)
+        )
     html = f"""\
 <div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
             max-width:560px;margin:0 auto;color:#111827;line-height:1.5">
@@ -250,6 +262,7 @@ async def _admin_alert_email(
     <tr><td style="padding:6px 0;color:#6b7280">Order</td>
         <td style="padding:6px 0;text-align:right;font-family:monospace;font-size:12px">
           {order_id}</td></tr>
+    {promo_rows}
   </table>
   <p style="margin:20px 0 0;padding-top:12px;border-top:1px solid #e5e7eb;
             color:#9ca3af;font-size:12px">
@@ -281,6 +294,62 @@ async def _telegram_admin(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Promo conversions
+# ---------------------------------------------------------------------------
+
+def _promo_snapshot(record_: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    The promo facts for a settled order, or None when it used no code. Adds
+    this order's discount to the code's running totals. Never raises: a
+    reporting failure must not touch a payment that already succeeded.
+    """
+    code = record_.get("promo_code")
+    if not code:
+        return None
+    try:
+        from app.database import promo_repo
+
+        snap = promo_repo.conversion_snapshot(code)
+    except Exception as e:
+        logger.warning("Could not compute promo conversion for %s: %s", code, e)
+        snap = None
+    snap = snap or {"code": code, "customers": None, "max_customers": None, "affiliate": None}
+    snap["discount_usd"] = float(record_.get("discount_usd") or 0)
+    return snap
+
+
+def _customers_label(promo: Dict[str, Any]) -> str:
+    """"7 customers" / "7 of 20 customers (13 left)"."""
+    n = promo.get("customers")
+    if n is None:
+        return "unknown"
+    cap = promo.get("max_customers")
+    if cap:
+        return f"{n} of {cap} customers ({max(cap - n, 0)} left)"
+    return f"{n} customer{'s' if n != 1 else ''}"
+
+
+def _promo_pairs(promo: Dict[str, Any]) -> list:
+    pairs = [
+        ("Promo code", f"{promo['code']} (−${promo.get('discount_usd', 0):.2f})"),
+        ("Code used by", _customers_label(promo)),
+    ]
+    aff = promo.get("affiliate")
+    if aff:
+        pairs.append((
+            "Affiliate",
+            f"{aff['name']}: {aff['customers']} paying customer"
+            f"{'s' if aff['customers'] != 1 else ''}, ${aff['revenue_usd']:,.2f} "
+            f"across {aff['codes']} code{'s' if aff['codes'] != 1 else ''}",
+        ))
+    return pairs
+
+
+def _promo_lines(promo: Dict[str, Any]) -> list:
+    return [f"{k}: {v}" for k, v in _promo_pairs(promo)]
+
+
+# ---------------------------------------------------------------------------
 # The event
 # ---------------------------------------------------------------------------
 
@@ -306,6 +375,7 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
     amount_usd = float(record_.get("amount") or 0)
     amount_idr = record_.get("amount_idr")
     email = record_.get("customer_email")
+    promo = _promo_snapshot(record_)
 
     meta = {
         "order_id": order_id,
@@ -344,6 +414,32 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
         meta={**meta, "user_id": user_id, "email": email},
     )
 
+    # In-app: admins, a promo conversion. Its own notification so the bell
+    # shows each affiliate conversion and the running customer count without
+    # opening the promo page.
+    if promo:
+        aff = promo.get("affiliate")
+        record(
+            audience="admin",
+            type_="promo_conversion",
+            title=f"Promo conversion — {promo['code']}"
+            + (f" ({aff['name']})" if aff else ""),
+            body="  ·  ".join(
+                [f"{email or user_id or 'A customer'} bought {label} for ${amount_usd:.2f}"]
+                + [f"{k}: {v}" for k, v in _promo_pairs(promo)]
+            ),
+            meta={
+                **meta,
+                "user_id": user_id,
+                "email": email,
+                "promo_code": promo["code"],
+                "promo_customers": promo.get("customers"),
+                "promo_max_customers": promo.get("max_customers"),
+                "affiliate": aff,
+                "affiliate_partner_id": promo.get("affiliate_partner_id"),
+            },
+        )
+
     # Email receipt to the customer
     if email:
         await _send_receipt(email, label, amount_usd, amount_idr, order_id, record_)
@@ -355,15 +451,21 @@ async def payment_settled(record_: Dict[str, Any], detail: str) -> None:
         user_id=user_id,
         email=email,
         payment_type=record_.get("payment_type"),
+        promo=promo,
     )
 
     # Admin Telegram ping
+    promo_text = ""
+    if promo:
+        # Telegram parses HTML; an affiliate named "A & B" must not break it.
+        promo_text = "\n🎟 " + "\n".join(html_lib.escape(l) for l in _promo_lines(promo))
     await _telegram_admin(
         f"💰 <b>Payment received</b>\n{label}\n"
         f"{_format_idr(amount_idr)} (${amount_usd:.2f})\n"
         f"User: {user_id or 'unknown user'}\n"
         f"Email: {email or 'no email on file'}\n"
         f"Order: <code>{order_id}</code>"
+        f"{promo_text}"
     )
 
 
