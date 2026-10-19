@@ -25,9 +25,10 @@ from app.database import pg
 _COLUMNS = (
     "code, discount_type, discount_value, max_redemptions, per_user_limit, "
     "valid_from, expires_at, products, active, campaign, note, created_by, "
-    "created_at, updated_at, affiliate_name, affiliate_company"
+    "created_at, updated_at, affiliate_name, affiliate_company, max_customers, "
+    "affiliate_partner_id, created_by_email"
 )
-_N_COLUMNS = 16
+_N_COLUMNS = 19
 
 # An order the customer actually paid for (or that was granted manually).
 _PAID = "(o.status = 'paid' OR o.granted_at IS NOT NULL)"
@@ -54,6 +55,9 @@ def _row(r: Tuple) -> Dict[str, Any]:
         "updated_at": iso(r[13]),
         "affiliate_name": r[14],
         "affiliate_company": r[15],
+        "max_customers": r[16],
+        "affiliate_partner_id": r[17],
+        "created_by_email": r[18],
     }
 
 
@@ -74,7 +78,25 @@ _USED_SQL = """
               status = 'paid' OR granted_at IS NOT NULL
               OR status = 'awaiting_verification'
           )
-      ) AS spent_by_user
+      ) AS spent_by_user,
+      -- Customer slots: a customer holds one once they have spent the code
+      -- or have a checkout with it open inside the payment window.
+      count(DISTINCT user_id) FILTER (
+          WHERE user_id <> %s AND (
+              status = 'paid' OR granted_at IS NOT NULL
+              OR status = 'awaiting_verification'
+              OR (status = 'pending'
+                  AND created_at > now() - make_interval(hours => %s))
+          )
+      ) AS other_customers,
+      count(*) FILTER (
+          WHERE user_id = %s AND (
+              status = 'paid' OR granted_at IS NOT NULL
+              OR status = 'awaiting_verification'
+              OR (status = 'pending'
+                  AND created_at > now() - make_interval(hours => %s))
+          )
+      ) AS caller_orders
     FROM billing.payment_orders
     WHERE promo_code = %s
 """
@@ -82,15 +104,19 @@ _USED_SQL = """
 
 def usage_in_cursor(cur, code: str, user_id: str) -> Dict[str, int]:
     """Redemption counts for `code`, from the caller's own cursor/transaction."""
+    hours = settings.payment_expiry_hours
     cur.execute(
         _USED_SQL,
-        (settings.payment_expiry_hours, user_id, user_id, code),
+        (hours, user_id, user_id, user_id, hours, user_id, hours, code),
     )
-    spent, held, by_user = cur.fetchone()
+    spent, held, by_user, other_customers, caller_orders = cur.fetchone()
     return {
         "total_used": int(spent) + int(held),
         "spent": int(spent),
         "used_by_user": int(by_user),
+        "other_customers": int(other_customers),
+        # Already one of the code's customers, so no new slot is needed.
+        "caller_is_customer": int(caller_orders) > 0,
     }
 
 
@@ -121,8 +147,9 @@ def insert_many(rows: List[Dict[str, Any]]) -> List[str]:
                 INSERT INTO billing.promo_codes
                     (code, discount_type, discount_value, max_redemptions,
                      per_user_limit, valid_from, expires_at, products, active,
-                     campaign, note, created_by, affiliate_name, affiliate_company)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     campaign, note, created_by, affiliate_name, affiliate_company,
+                     max_customers, affiliate_partner_id, created_by_email)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (code) DO NOTHING
                 RETURNING code
                 """,
@@ -132,12 +159,40 @@ def insert_many(rows: List[Dict[str, Any]]) -> List[str]:
                     r.get("valid_from"), r.get("expires_at"), r.get("products"),
                     r.get("active", True), r.get("campaign"), r.get("note"),
                     r.get("created_by"), r.get("affiliate_name"),
-                    r.get("affiliate_company"),
+                    r.get("affiliate_company"), r.get("max_customers"),
+                    r.get("affiliate_partner_id"), r.get("created_by_email"),
                 ),
             )
             if cur.fetchone():
                 created.append(r["code"])
     return created
+
+
+def canonical_affiliate(column: str, value: Optional[str]) -> Optional[str]:
+    """
+    The spelling already on record for the affiliate `value` names, else
+    `value` itself. Matching uses promo.affiliate_key, so a retyped name with
+    different case, spacing or "PT"/"Tbk" joins the existing affiliate rather
+    than splitting its numbers. The oldest spelling wins.
+    """
+    if not value:
+        return value
+    if column not in ("affiliate_company", "affiliate_name"):
+        raise ValueError(column)
+    from app.services.promo import affiliate_key
+
+    key = affiliate_key(value)
+    if not key:
+        return value
+    with pg.cursor(commit=False) as cur:
+        cur.execute(
+            f"SELECT {column} FROM billing.promo_codes WHERE {column} IS NOT NULL "
+            f"GROUP BY {column} ORDER BY min(created_at)"
+        )
+        for (existing,) in cur.fetchall():
+            if affiliate_key(existing) == key:
+                return existing
+    return value
 
 
 def set_active(code: str, active: bool) -> bool:
@@ -185,17 +240,26 @@ def list_codes(
         "AND (o.status = 'paid' OR o.granted_at IS NOT NULL "
         "OR o.status = 'awaiting_verification'))"
     )
+    customers = (
+        "(SELECT count(DISTINCT o.user_id) FROM billing.payment_orders o "
+        "WHERE o.promo_code = c.code AND (o.status = 'paid' OR o.granted_at IS NOT NULL "
+        "OR o.status = 'awaiting_verification'))"
+    )
+    full = (
+        f"((c.max_redemptions IS NOT NULL AND {redeemed} >= c.max_redemptions) "
+        f"OR (c.max_customers IS NOT NULL AND {customers} >= c.max_customers))"
+    )
     if status == "active":
         where.append(
             "c.active AND (c.expires_at IS NULL OR c.expires_at > now()) "
-            f"AND (c.max_redemptions IS NULL OR {redeemed} < c.max_redemptions)"
+            f"AND NOT {full}"
         )
     elif status == "inactive":
         where.append("NOT c.active")
     elif status == "expired":
         where.append("c.expires_at IS NOT NULL AND c.expires_at <= now()")
     elif status == "exhausted":
-        where.append(f"c.max_redemptions IS NOT NULL AND {redeemed} >= c.max_redemptions")
+        where.append(full)
 
     clause = " AND ".join(where)
     cols = ", ".join(f"c.{c.strip()}" for c in _COLUMNS.split(","))
@@ -204,7 +268,7 @@ def list_codes(
         total = int(cur.fetchone()[0])
         cur.execute(
             f"""
-            SELECT {cols}, {redeemed} AS redeemed,
+            SELECT {cols}, {redeemed} AS redeemed, {customers} AS customers_used,
                    COALESCE(o.discount_given_usd, 0), COALESCE(o.revenue_usd, 0),
                    COALESCE(e.applied_users, 0), COALESCE(o.checkout_users, 0),
                    COALESCE(o.paid_users, 0)
@@ -221,7 +285,8 @@ def list_codes(
         for r in cur.fetchall():
             d = _row(r[:_N_COLUMNS])
             d["redeemed"] = int(r[_N_COLUMNS])
-            d.update(_funnel(r[_N_COLUMNS + 1:]))
+            d["customers_used"] = int(r[_N_COLUMNS + 1])
+            d.update(_funnel(r[_N_COLUMNS + 2:]))
             out.append(d)
     return out, total
 
@@ -288,12 +353,13 @@ def affiliates() -> List[Dict[str, Any]]:
             f"""
             WITH c AS (
                 SELECT code, COALESCE(affiliate_company, affiliate_name) AS affiliate,
-                       affiliate_name, affiliate_company
+                       affiliate_name, affiliate_company, affiliate_partner_id
                 FROM billing.promo_codes
                 WHERE COALESCE(affiliate_company, affiliate_name) IS NOT NULL
             )
             SELECT c.affiliate,
                    min(c.affiliate_company), string_agg(DISTINCT c.affiliate_name, ', '),
+                   min(c.affiliate_partner_id),
                    count(DISTINCT c.code),
                    COALESCE((SELECT sum(o.discount_usd) FILTER (WHERE {_PAID})
                              FROM billing.payment_orders o
@@ -323,9 +389,10 @@ def affiliates() -> List[Dict[str, Any]]:
                 "affiliate": r[0],
                 "affiliate_company": r[1],
                 "affiliate_names": r[2],
-                "codes": int(r[3]),
+                "affiliate_partner_id": r[3],
+                "codes": int(r[4]),
             }
-            d.update(_funnel(r[4:9]))
+            d.update(_funnel(r[5:10]))
             out.append(d)
     return out
 

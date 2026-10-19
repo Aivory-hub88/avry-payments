@@ -97,11 +97,24 @@ def evaluate(
     cap = promo.get("max_redemptions")
     if cap is not None and usage["total_used"] >= cap:
         raise PromoError("exhausted", "That promo code has been fully redeemed.")
+    if customer_cap_reached(promo.get("max_customers"), usage):
+        raise PromoError("exhausted", "That promo code has been fully redeemed.")
 
     discount = compute_discount_usd(list_usd, promo["discount_type"], promo["discount_value"])
     if discount <= 0:
         raise PromoError("not_applicable", "That promo code doesn't change the price.")
     return discount
+
+
+def customer_cap_reached(max_customers: Optional[int], usage: Dict[str, Any]) -> bool:
+    """
+    Whether a NEW customer would exceed the code's customer limit. A customer
+    who already holds a slot (spent the code, or has a checkout with it open)
+    is never blocked by this; per_user_limit governs their further uses.
+    """
+    if max_customers is None or usage.get("caller_is_customer"):
+        return False
+    return usage.get("other_customers", 0) >= max_customers
 
 
 @dataclass
@@ -166,6 +179,18 @@ _ENTITY_WORDS = {
     "LTD", "LLC", "INC", "CORP", "CO", "COMPANY", "GROUP", "THE",
 }
 AFFILIATE_PREFIX_MAX = 12
+
+
+def affiliate_key(value: Optional[str]) -> str:
+    """
+    What makes two affiliate names the same affiliate: letters and digits only,
+    legal-entity words dropped, case ignored. "PT Distributor Nusantara",
+    "distributor nusantara" and "Distributor Nusantara Tbk" share a key, so
+    they are reported as one affiliate instead of three.
+    """
+    words = re.findall(r"[A-Z0-9]+", (value or "").upper())
+    meaningful = [w for w in words if w not in _ENTITY_WORDS] or words
+    return "".join(meaningful).lower()
 
 
 def affiliate_prefix(name: Optional[str], company: Optional[str]) -> str:
