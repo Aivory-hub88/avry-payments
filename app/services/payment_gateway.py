@@ -165,7 +165,22 @@ class MidtransPaymentService:
     # channel, so a stale frontend would break checkout outright instead of
     # merely falling back to the full channel list.
     SUPPORTED_SNAP_CHANNELS = frozenset(
-        {"credit_card", "gopay", "dana", "qris", "shopeepay"}
+        {
+            "credit_card", "gopay", "dana", "qris", "other_qris", "shopeepay",
+            # Virtual accounts and Mandiri bill payment. Checked 2026-10-19 by
+            # creating a Snap token naming each and reading back what Snap
+            # rendered: these are shown; bca_va, shopeepay and dana are not
+            # (not activated on the account), and Snap silently drops them.
+            "echannel", "bni_va", "bri_va", "permata_va", "cimb_va", "bsi_va", "other_va",
+        }
+    )
+
+    # Every bank-transfer channel Snap shows for this account, in the order
+    # customers should see them. The checkout's "Virtual Account" tile sends
+    # `bank_transfer`, which expands to this list so Snap opens on the bank
+    # picker.
+    VA_SNAP_CHANNELS = (
+        "bni_va", "bri_va", "echannel", "permata_va", "cimb_va", "bsi_va", "other_va",
     )
 
     # Midtrans has no separate debit-card channel: Visa/Mastercard/JCB debit
@@ -179,6 +194,12 @@ class MidtransPaymentService:
         "debit": "credit_card",
         "card": "credit_card",
     }
+    # One caller-facing name standing for a group of Snap channels.
+    CHANNEL_GROUPS = {
+        "bank_transfer": VA_SNAP_CHANNELS,
+        "virtual_account": VA_SNAP_CHANNELS,
+        "va": VA_SNAP_CHANNELS,
+    }
 
     # The channels checkout offers when the caller expresses no preference.
     # Without this Snap falls back to *every* channel enabled on the merchant
@@ -188,7 +209,11 @@ class MidtransPaymentService:
     # it could never move off Snap, and offering a channel that can never get
     # the Aivory-drawn payment screen just splits the experience. Customers
     # paying with DANA scan the QRIS code instead, which the DANA app supports.
-    DEFAULT_SNAP_CHANNELS = ("credit_card", "gopay", "qris", "shopeepay")
+    #
+    # Bank transfer / VA is offered again (2026-10-19): the merchant account
+    # has the VAs activated, and until Core API is activated Snap is the only
+    # way to take any payment, so it should show every method we can collect.
+    DEFAULT_SNAP_CHANNELS = ("credit_card", "gopay", "qris", "shopeepay") + VA_SNAP_CHANNELS
 
     @classmethod
     def normalise_channels(cls, channels: Optional[List[str]]) -> List[str]:
@@ -208,8 +233,9 @@ class MidtransPaymentService:
             # "credit-card") onto the snake_case Snap identifiers.
             key = "_".join(raw.strip().lower().replace("-", " ").split())
             key = cls.CHANNEL_ALIASES.get(key, key)
-            if key in cls.SUPPORTED_SNAP_CHANNELS and key not in resolved:
-                resolved.append(key)
+            for channel in cls.CHANNEL_GROUPS.get(key, (key,)):
+                if channel in cls.SUPPORTED_SNAP_CHANNELS and channel not in resolved:
+                    resolved.append(channel)
         return resolved
 
     # ------------------------------------------------------------------
