@@ -347,3 +347,38 @@ def test_partner_gets_conversion_email_without_buyer_identity(repo, monkeypatch)
         "promo_code": "PLAIN-X",
     }, "settled"))
     assert not [s for s in sent if "was just used" in s[1]]
+
+
+def test_confirm_returns_order_summary_for_the_success_page(repo, monkeypatch):
+    _, pg = repo
+    from app.services.payment_gateway import midtrans_service
+
+    with pg.cursor() as cur:
+        _order(cur, 1, "cust1", None, "pending", amount=0.2, discount=0)
+
+    async def settled(order_id, expected_user_id=None):
+        return {"success": True, "order_id": order_id, "status": "paid", "granted": True}
+
+    monkeypatch.setattr(midtrans_service, "settle_order", settled)
+    client = _client({"user_id": "cust1", "account_type": "paid"})
+    body = client.post("/api/v1/payments/confirm", json={"order_id": "o1"}).json()
+    assert body["granted"] is True and body["status"] == "paid"
+    assert body["product"] == "business" and body["product_name"] == "Business Plan"
+    assert body["amount_usd"] == 0.2
+
+    async def pending(order_id, expected_user_id=None):
+        return {"success": True, "order_id": order_id, "status": "pending", "granted": False}
+
+    monkeypatch.setattr(midtrans_service, "settle_order", pending)
+    body = client.post("/api/v1/payments/confirm", json={"order_id": "o1"}).json()
+    assert body["granted"] is False and body["status"] == "pending"
+
+    # Somebody else's order stays private.
+    other = _client({"user_id": "cust2", "account_type": "paid"})
+    assert other.post("/api/v1/payments/confirm", json={"order_id": "o1"}).status_code == 403
+
+
+def test_finish_redirect_goes_to_the_marketing_success_page():
+    from app.config import Settings
+
+    assert Settings.model_fields["payment_finish_redirect_url"].default == "https://aivory.uk/checkout/success"

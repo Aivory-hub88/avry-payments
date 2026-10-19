@@ -50,19 +50,17 @@ class Settings(BaseSettings):
     # pricing is current even with no payments that day. Note the default
     # provider only publishes once per ~24h — see app/services/fx.py.
     fx_poll_seconds: int = 2 * 60 * 60
-    # Where Snap sends the customer once they finish/cancel.
-    # Note the doubled segment: the dashboard runs with Next.js basePath
-    # "/dashboard" *and* has an app/dashboard route, so the single-segment
-    # form 404s and would land paying customers on a dead page.
-    # aivory.uk, not the legacy dashboard.aivory.id, which 301s here anyway.
-    # This value is both Midtrans' finish redirect and the receipt email's CTA.
-    # For the email an extra hop is only untidy; for Midtrans it is a real risk,
-    # because mobile e-wallet flows return through a deep link and a redirect
-    # chain is where query parameters get dropped. It also keeps the money path
-    # off a domain that is being retired.
-    payment_finish_redirect_url: str = (
-        "https://aivory.uk/dashboard/dashboard/payments"
-    )
+    # Where Midtrans sends the customer once they finish or cancel a payment
+    # outside our page: Snap's hosted page, an e-wallet app's return, the
+    # ShopeePay callback. Midtrans appends ?order_id=…&transaction_status=…,
+    # and the marketing site's /checkout/success verifies the order through
+    # POST /confirm and shows paid / awaiting payment / failed.
+    # It used to be the dashboard's payments page, which dropped a customer who
+    # had just bought from the marketing site onto a dashboard (or its login)
+    # with no confirmation. aivory.uk directly, not a domain that redirects:
+    # e-wallet flows return through a deep link, and a redirect chain is where
+    # query parameters get dropped. (The receipt email links its own PDF.)
+    payment_finish_redirect_url: str = "https://aivory.uk/checkout/success"
     # How long a Snap payment link stays valid, in hours.
     payment_expiry_hours: int = 24
 
