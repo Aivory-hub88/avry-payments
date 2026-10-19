@@ -483,6 +483,29 @@ class MidtransPaymentService:
             logger.error("Core API charge failed for %s (%s): %s", order_id, channel, e)
             return {"success": False, "error": "Could not reach payment gateway"}
 
+        # Core API answers HTTP 200 even when it refuses a charge: the verdict is
+        # the body's own status_code ("201" created, "200" captured/settled). A
+        # refusal used to be reported as success, so a customer picking GoPay
+        # or QRIS on an account where those Core API channels are not activated
+        # was shown an empty "awaiting payment" screen with no QR at all.
+        body_code = str(result.get("status_code") or "")
+        if body_code not in ("200", "201"):
+            message = result.get("status_message") or "Payment gateway refused the charge"
+            logger.error(
+                "Core API charge refused for %s (%s): %s %s %s",
+                order_id, channel, body_code, message,
+                (result.get("validation_messages") or "")[:300] if isinstance(result.get("validation_messages"), str)
+                else result.get("validation_messages"),
+            )
+            return {
+                "success": False,
+                "error": message,
+                "status_code": body_code,
+                # "Payment channel is not activated" (402) and anything else the
+                # merchant account can't do on Core API: Snap may still serve it.
+                "fallback_to_snap": channel != "credit_card" or body_code == "402",
+            }
+
         status = result.get("transaction_status")
         logger.info(
             "Core API charge created: %s (%s, %s IDR) -> %s",
