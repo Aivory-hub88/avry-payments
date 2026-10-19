@@ -576,11 +576,25 @@ async def confirm_payment(
         expected_user_id=None if _is_admin(caller) else _caller_user_id(caller),
     )
 
+    # What the order was for, so a confirmation page can summarise it. Only the
+    # order's own owner (or an admin) gets this far.
+    order = {
+        "product": record.get("product"),
+        "product_name": pricing.product_name(record.get("product") or ""),
+        "amount_idr": record.get("amount_idr"),
+        "amount_usd": record.get("amount"),
+        "promo_code": record.get("promo_code"),
+    }
+
     if not result.get("success"):
         return {
             "success": False,
             "message": result.get("error", "Could not confirm payment"),
             "order_id": request.order_id,
+            # Lets the page tell "still pending" from "failed" without a
+            # second call; settle_order records the fresh Midtrans status.
+            "status": (_find_payment(request.order_id) or {}).get("status"),
+            **order,
         }
 
     return {
@@ -591,6 +605,7 @@ async def confirm_payment(
         "status": result.get("status"),
         "granted": bool(result.get("granted") or result.get("already_granted")),
         "detail": result.get("detail"),
+        **order,
     }
 
 
