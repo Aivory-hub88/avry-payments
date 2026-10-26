@@ -173,6 +173,16 @@ CREATE TABLE IF NOT EXISTS billing.promo_code_events (
 );
 CREATE INDEX IF NOT EXISTS promo_code_events_code_idx
     ON billing.promo_code_events (code, created_at DESC);
+
+-- A 100% promo makes a free order (payment_method 'promo_free'): recorded at
+-- zero and granted without Midtrans. Every other path still prices above
+-- Midtrans' floor in code (pricing.resolve_charge), so only the sign changes.
+ALTER TABLE billing.payment_orders
+    DROP CONSTRAINT IF EXISTS payment_orders_amount_usd_check,
+    ADD CONSTRAINT payment_orders_amount_usd_check CHECK (amount_usd >= 0),
+    DROP CONSTRAINT IF EXISTS payment_orders_amount_idr_check,
+    ADD CONSTRAINT payment_orders_amount_idr_check
+        CHECK (amount_idr IS NULL OR amount_idr >= 0);
 """
 
 

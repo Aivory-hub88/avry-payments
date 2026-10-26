@@ -183,3 +183,8 @@ def test_affiliate_key_matches_retyped_names(a, b):
 
 def test_affiliate_key_keeps_different_affiliates_apart():
     assert promo.affiliate_key("PT Distributor Nusantara") != promo.affiliate_key("PT Distributor Jaya")
+
+
+def test_a_full_discount_is_free_only_when_allowed():
+    assert pricing.resolve_charge("credits_50", 5.0, allow_free=True) == (0.0, 0)
+    assert promo.compute_discount_usd(20.0, "percent", 100) == 20.0

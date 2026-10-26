@@ -187,16 +187,22 @@ def resolve_gross_amount_idr(product: str) -> int:
     return idr
 
 
-def resolve_charge(product: str, discount_usd: float = 0.0) -> "tuple[float, int]":
+def resolve_charge(
+    product: str, discount_usd: float = 0.0, allow_free: bool = False
+) -> "tuple[float, int]":
     """
     The (USD, IDR) actually charged for `product` after a server-derived discount.
 
     `discount_usd` must come from `promo.quote()`, never from a request body.
     Raises UnknownProduct if the discounted total falls under Midtrans' floor.
+    A total of zero (a 100% promo) is (0.0, 0) when `allow_free`; such an
+    order never reaches Midtrans, so the gateway paths leave it off.
     """
     list_usd = resolve_price_usd(product)
     net_usd = round(list_usd - max(discount_usd, 0.0), 2)
     if net_usd <= 0:
+        if allow_free:
+            return 0.0, 0
         raise UnknownProduct(f"{product} would be charged at or below zero")
     idr = usd_to_idr(net_usd)
     if idr < MIN_GROSS_AMOUNT_IDR:

@@ -205,6 +205,26 @@ def set_active(code: str, active: bool) -> bool:
         return cur.fetchone() is not None
 
 
+# Columns an admin may change after a code is created. The discount, products
+# and affiliate stay fixed: they are what the code's conversion numbers mean.
+EDITABLE = ("active", "valid_from", "expires_at", "max_customers", "max_redemptions",
+            "per_user_limit", "note")
+
+
+def update(code: str, fields: Dict[str, Any]) -> bool:
+    fields = {k: v for k, v in fields.items() if k in EDITABLE}
+    if not fields:
+        return get(code) is not None
+    sets = ", ".join(f"{k} = %s" for k in fields)
+    with pg.cursor() as cur:
+        cur.execute(
+            f"UPDATE billing.promo_codes SET {sets}, updated_at = now() "
+            "WHERE code = %s RETURNING code",
+            (*fields.values(), code),
+        )
+        return cur.fetchone() is not None
+
+
 def list_codes(
     search: Optional[str] = None,
     campaign: Optional[str] = None,
