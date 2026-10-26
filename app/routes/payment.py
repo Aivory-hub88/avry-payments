@@ -154,7 +154,10 @@ class ChargeRequest(BaseModel):
         description="Card token from Midtrans' browser JS. Required for credit_card. "
                     "Raw card details are never accepted here.",
     )
-    bank: str = Field("bca", description="Bank for a bank_transfer VA")
+    # No default: BCA (the old default) is not activated on the merchant
+    # account, so a VA must name one of CORE_API_VA_BANKS. "mandiri" is served
+    # as a Mandiri bill payment (echannel).
+    bank: Optional[str] = Field(None, description="Bank for a bank_transfer VA")
     promo_code: Optional[str] = Field(
         None, description="Promo code; the discount is derived server-side"
     )
