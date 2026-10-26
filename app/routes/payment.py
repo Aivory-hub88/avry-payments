@@ -95,6 +95,89 @@ def _price_order(product: str, raw_promo: Optional[str], user_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+async def _settle_free_order(
+    user_id: str,
+    product: str,
+    list_usd: float,
+    discount_usd: float,
+    promo_code: Optional[str],
+    customer_email: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Complete an order a 100% promo made free. There is nothing for Midtrans to
+    collect, so the order is recorded and granted here, through the same
+    promo-capped insert and the same row-locked, idempotent grant as a paid one.
+    """
+    from app.services.entitlements import apply_entitlement
+
+    canonical = pricing.canonical_product(product)
+    order_id = generate_id(f"payment_{canonical}")
+    # The insert locks the promo row and re-checks its caps, so two customers
+    # cannot both take the last free slot.
+    _create_order({
+        "payment_id": generate_id("payment"),
+        "order_id": order_id,
+        "user_id": user_id,
+        "product": canonical,
+        "amount": 0.0,
+        "amount_idr": 0,
+        "usd_idr_rate": fx.current_rate(),
+        "promo_code": promo_code,
+        "discount_usd": discount_usd,
+        "list_amount_usd": list_usd,
+        "status": "pending",
+        "payment_method": "promo_free",
+        "is_mock": False,
+        "transaction_id": None,
+        "customer_email": customer_email,
+    })
+
+    settled_record = None
+    detail = ""
+    with payment_repo.SettlementLock(order_id) as lock:
+        locked = lock.record
+        granted, detail = await apply_entitlement(
+            user_id=user_id,
+            product=canonical,
+            amount_usd=float(list_usd),
+            order_id=order_id,
+        )
+        if granted:
+            lock.update(
+                status="paid",
+                granted_at=datetime.now(timezone.utc),
+                grant_detail={"detail": detail, "promo_code": promo_code, "free": True},
+            )
+            payment_repo.assign_invoice_number(lock)
+            settled_record = dict(lock.record or locked)
+        else:
+            lock.update(status="paid_grant_failed", grant_error=detail)
+
+    if settled_record is None:
+        logger.error("Free order %s recorded but entitlement failed: %s", order_id, detail)
+        raise HTTPException(
+            status_code=503,
+            detail="Your order is recorded but could not be activated yet. Please try again shortly.",
+        )
+
+    try:
+        from app.services import notifications
+
+        await notifications.payment_settled(settled_record, detail)
+    except Exception as e:
+        logger.error("Notification failed for free order %s (order stands): %s", order_id, e)
+
+    logger.info("Free order %s granted (%s, promo %s) for %s", order_id, canonical, promo_code, user_id)
+    return {
+        "success": True,
+        "order_id": order_id,
+        "transaction_status": "settlement",
+        "amount_usd": 0.0,
+        "amount_idr": 0,
+        "free": True,
+    }
+
+
 # ============================================================================
 # Pydantic Models
 # ============================================================================
@@ -133,6 +216,8 @@ class CreateTransactionResponse(BaseModel):
     amount_usd: Optional[float] = None
     amount_idr: Optional[int] = None
     error: Optional[str] = None
+    # A 100% promo: the order was granted on the spot and there is nothing to pay.
+    free: bool = False
 
 
 class ChargeRequest(BaseModel):
@@ -186,6 +271,8 @@ class ChargeResponse(BaseModel):
     deeplink_url: Optional[str] = None
     va_number: Optional[str] = None
     va_bank: Optional[str] = None
+    # A 100% promo: granted on the spot, nothing to draw.
+    free: bool = False
     biller_code: Optional[str] = None
     redirect_url: Optional[str] = None
     error: Optional[str] = None
@@ -344,6 +431,14 @@ async def create_midtrans_transaction(
     amount_usd, amount_idr, list_usd, discount_usd, promo_code = _price_order(
         request.product, request.promo_code, target_user_id
     )
+    if amount_idr == 0:
+        free = await _settle_free_order(
+            target_user_id, request.product, list_usd, discount_usd, promo_code,
+            request.customer_email,
+        )
+        return CreateTransactionResponse(
+            success=True, order_id=free["order_id"], amount_usd=0.0, amount_idr=0, free=True,
+        )
 
     customer_details: Dict[str, Any] = {}
     if request.customer_email:
@@ -415,6 +510,11 @@ async def charge_midtrans(
     amount_usd, amount_idr, list_usd, discount_usd, promo_code = _price_order(
         request.product, request.promo_code, target_user_id
     )
+    if amount_idr == 0:
+        return ChargeResponse(**await _settle_free_order(
+            target_user_id, request.product, list_usd, discount_usd, promo_code,
+            request.customer_email,
+        ))
 
     customer_details: Dict[str, Any] = {}
     if request.customer_email:
@@ -658,6 +758,12 @@ async def submit_manual_payment(
     amount_usd, amount_idr, list_usd, discount_usd, promo_code = _price_order(
         request.product, request.promo_code, target_user_id
     )
+
+    if amount_idr == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="This order is free with your promo code — complete it at checkout instead.",
+        )
 
     canonical = pricing.canonical_product(request.product)
     order_id = generate_id(f"manual_{canonical}")

@@ -30,7 +30,7 @@ CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{2,31}$")
 # No 0/O/1/I/L: generated codes get read aloud and retyped from screenshots.
 _ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-MAX_PERCENT = 99  # 100% would be a free order, which Midtrans cannot charge
+MAX_PERCENT = 100  # 100% is a free order: granted directly, never sent to Midtrans
 MAX_BULK = 500
 
 
@@ -156,7 +156,7 @@ def quote(raw_code: str, product: str, user_id: str) -> Quote:
         raise PromoError("not_found", "That promo code isn't valid.")
 
     discount = evaluate(promo, canonical, list_usd, promo_repo.usage(code, user_id))
-    final_usd, final_idr = pricing.resolve_charge(product, discount)
+    final_usd, final_idr = pricing.resolve_charge(product, discount, allow_free=True)
     return Quote(
         code=code,
         product=canonical,

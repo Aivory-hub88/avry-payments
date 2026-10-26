@@ -61,8 +61,23 @@ class GenerateRequest(BaseModel):
         return v
 
 
-class ActiveRequest(BaseModel):
-    active: bool
+class UpdateRequest(BaseModel):
+    """Only the fields sent are changed; send `expires_at: null` to remove the end date."""
+    active: Optional[bool] = None
+    valid_from: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    max_customers: Optional[int] = Field(None, ge=1)
+    max_redemptions: Optional[int] = Field(None, ge=1)
+    per_user_limit: Optional[int] = Field(None, ge=1, le=100)
+    note: Optional[str] = Field(None, max_length=300)
+
+
+class RegenerateRequest(BaseModel):
+    """A fresh code carrying the old one's rules, with its own usage count."""
+    code: Optional[str] = Field(None, max_length=32, description="Custom code; blank = generated")
+    valid_from: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    deactivate_old: bool = True
 
 
 def _validate(req: GenerateRequest) -> None:
@@ -244,12 +259,89 @@ async def code_leads(code: str, _admin: dict = Depends(require_admin)):
     return {"success": True, "code": norm, "leads": promo_repo.leads(norm)}
 
 
-@router.patch("/{code}")
-async def set_active(code: str, req: ActiveRequest, _admin: dict = Depends(require_admin)):
+def _existing(code: str) -> dict:
     try:
         norm = promo.normalize_code(code)
     except promo.PromoError:
         raise HTTPException(status_code=404, detail="Unknown promo code")
-    if not promo_repo.set_active(norm, req.active):
+    row = promo_repo.get(norm)
+    if not row:
         raise HTTPException(status_code=404, detail="Unknown promo code")
-    return {"success": True, "code": norm, "active": req.active}
+    return row
+
+
+def _parse_iso(v: Optional[str]) -> Optional[datetime]:
+    return datetime.fromisoformat(v) if v else None
+
+
+@router.patch("/{code}")
+async def update_code(code: str, req: UpdateRequest, _admin: dict = Depends(require_admin)):
+    """Activate/deactivate a code, or change its dates and limits."""
+    row = _existing(code)
+    fields = {k: getattr(req, k) for k in req.model_fields_set}
+    # Blank limits mean "no limit", except per_user_limit, which always has one.
+    if "per_user_limit" in fields and fields["per_user_limit"] is None:
+        del fields["per_user_limit"]
+    if "note" in fields:
+        fields["note"] = (fields["note"] or "").strip() or None
+
+    valid_from = fields["valid_from"] if "valid_from" in fields else _parse_iso(row["valid_from"])
+    expires_at = fields["expires_at"] if "expires_at" in fields else _parse_iso(row["expires_at"])
+    if valid_from and expires_at and expires_at <= valid_from:
+        raise HTTPException(status_code=400, detail="expires_at must be after valid_from")
+
+    promo_repo.update(row["code"], fields)
+    return {"success": True, "code": row["code"], **promo_repo.get(row["code"])}
+
+
+@router.post("/{code}/regenerate")
+async def regenerate(code: str, req: RegenerateRequest, admin: dict = Depends(require_admin)):
+    """
+    Issue a new code with the same discount, products, limits and affiliate,
+    and (by default) retire the old one. Usage starts from zero because usage
+    is counted per code — the way to re-run a test code someone already spent.
+    """
+    old = _existing(code)
+    if req.valid_from and req.expires_at and req.expires_at <= req.valid_from:
+        raise HTTPException(status_code=400, detail="expires_at must be after valid_from")
+
+    if req.code:
+        try:
+            new_codes = [promo.normalize_code(req.code)]
+        except promo.PromoError:
+            raise HTTPException(
+                status_code=400, detail="Code must be 3-32 characters: A-Z, 0-9, '-' or '_'"
+            )
+    else:
+        # Same affiliate prefix as a generated code; for a custom code, its own
+        # spelling, so AIVORY-TEST99 becomes AIVORY-TEST99-K7M2Q9XA.
+        prefix = promo.affiliate_prefix(old["affiliate_name"], old["affiliate_company"])
+        prefix = prefix or old["code"][:23]
+        new_codes = [promo.generate_code(prefix) for _ in range(3)]
+
+    rules = {k: old[k] for k in (
+        "discount_type", "discount_value", "max_redemptions", "max_customers",
+        "per_user_limit", "products", "campaign", "note", "affiliate_name",
+        "affiliate_company", "affiliate_partner_id",
+    )}
+    created: List[str] = []
+    # A generated code can collide, rarely; the next candidate is tried then.
+    for candidate in new_codes:
+        created = promo_repo.insert_many([{
+            **rules,
+            "code": candidate,
+            "valid_from": req.valid_from,
+            "expires_at": req.expires_at,
+            "created_by": caller_user_id(admin),
+            "created_by_email": admin.get("email"),
+        }])
+        if created:
+            break
+    if not created:
+        raise HTTPException(status_code=409, detail="That code already exists")
+
+    if req.deactivate_old:
+        promo_repo.update(old["code"], {"active": False})
+    logger.info("Promo %s regenerated as %s by %s", old["code"], created[0], caller_user_id(admin))
+    return {"success": True, "code": created[0], "replaced": old["code"],
+            "old_deactivated": req.deactivate_old}
