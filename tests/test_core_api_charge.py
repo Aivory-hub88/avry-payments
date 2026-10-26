@@ -68,3 +68,31 @@ def test_created_charge_is_a_success(gateway):
     })
     r = _charge("gopay")
     assert r["success"] is True and r["transaction_id"] == "t1" and r["qr_url"] == "https://qr"
+
+
+def test_va_needs_an_activated_bank(gateway):
+    gateway({"status_code": "201", "transaction_status": "pending",
+             "va_numbers": [{"bank": "bni", "va_number": "988123"}]})
+    r = asyncio.run(midtrans_service.create_charge(user_id="u1", product="operational",
+                                                   channel="bank_transfer", bank="bni"))
+    assert r["success"] and r["va_number"] == "988123" and r["va_bank"] == "bni"
+    for bad in (None, "bca", "xyz"):
+        r = asyncio.run(midtrans_service.create_charge(user_id="u1", product="operational",
+                                                       channel="bank_transfer", bank=bad))
+        assert r["success"] is False and r["fallback_to_snap"] is False
+
+
+def test_mandiri_is_a_bill_payment(gateway, monkeypatch):
+    sent = {}
+
+    async def post(self, url, json=None, headers=None):
+        sent["payload"] = json
+        return _Resp({"status_code": "201", "transaction_status": "pending",
+                      "bill_key": "70012", "biller_code": "70017"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    r = asyncio.run(midtrans_service.create_charge(user_id="u1", product="operational",
+                                                   channel="bank_transfer", bank="mandiri"))
+    assert sent["payload"]["payment_type"] == "echannel"
+    assert len(sent["payload"]["echannel"]["bill_info2"]) <= 30
+    assert (r["va_number"], r["biller_code"], r["va_bank"]) == ("70012", "70017", "mandiri")

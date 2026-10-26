@@ -379,7 +379,14 @@ class MidtransPaymentService:
         "shopeepay": {"payment_type": "shopeepay", "needs_callback_url": True},
         "credit_card": {"payment_type": "credit_card", "needs_card_token": True},
         "bank_transfer": {"payment_type": "bank_transfer", "needs_bank": True},
+        # Mandiri has no VA here: it is a bill payment (biller code + bill key).
+        "echannel": {"payment_type": "echannel", "needs_bill_info": True},
     }
+
+    # VA banks activated for Core API on the merchant account (probed
+    # 2026-10-26: bni, bri, permata, cimb, bsi and Mandiri bill answer 201;
+    # bca answers 402 "Payment channel is not activated").
+    CORE_API_VA_BANKS = ("bni", "bri", "permata", "cimb", "bsi")
 
     @staticmethod
     def _render_payload(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -413,7 +420,7 @@ class MidtransPaymentService:
         channel: str,
         customer_details: Optional[Dict[str, Any]] = None,
         card_token_id: Optional[str] = None,
-        bank: str = "bca",
+        bank: Optional[str] = None,
         callback_url: Optional[str] = None,
         discount_usd: float = 0.0,
     ) -> Dict[str, Any]:
@@ -428,6 +435,18 @@ class MidtransPaymentService:
         as in the Snap path; there is deliberately no `amount` parameter.
         """
         from app.utils.id_generator import generate_id
+
+        # "Virtual account at Mandiri" is a Mandiri bill payment.
+        if channel == "bank_transfer" and (bank or "").lower() == "mandiri":
+            channel = "echannel"
+        if channel == "bank_transfer":
+            bank = (bank or "").lower()
+            if bank not in self.CORE_API_VA_BANKS:
+                return {
+                    "success": False,
+                    "error": "Choose a bank for the virtual account",
+                    "fallback_to_snap": False,
+                }
 
         spec = self.CORE_API_CHANNELS.get(channel)
         if spec is None:
@@ -467,6 +486,12 @@ class MidtransPaymentService:
             payload["credit_card"] = {"token_id": card_token_id, "authentication": True}
         if spec.get("needs_bank"):
             payload["bank_transfer"] = {"bank": bank}
+        if spec.get("needs_bill_info"):
+            # Shown on the customer's Mandiri app: label (<=10) + item (<=30).
+            payload["echannel"] = {
+                "bill_info1": "Payment",
+                "bill_info2": pricing.product_name(product)[:30],
+            }
         if spec.get("needs_callback_url"):
             payload["shopeepay"] = {
                 "callback_url": callback_url or settings.payment_finish_redirect_url
