@@ -61,29 +61,27 @@ for _annual, _monthly in ANNUAL_PRODUCTS.items():
 
 # Credit top-up packs, in USD, keyed by the credits granted.
 #
-# These are the prices the dashboard's credit marketplace puts in front of the
-# customer, charged with no markup on top. They previously sat 17-36% above the
-# advertised figures, so anyone buying 10,000 credits saw $550 and would have
-# been charged $750. The comment that used to live here claimed 100/$10,
-# 500/$45, 1000/$85 and 5000/$400 were "what the dashboard has always
-# advertised" -- it was stale, and the mismatch went unnoticed because the
-# dashboard's purchase button was still a mock alert.
+# A credit is $0.004365 of LLM spend (CREDIT_COST_USD in avry-backend's
+# app/services/tiers.py; the bridge charges each agent turn by what OpenRouter
+# billed). Every pack keeps at least a 65% margin over that at peak DeepSeek
+# rates, after the ~3% gateway fee; the smallest pack sits at 70% and the
+# discount deepens with size. Bought credits land in the account's extra
+# balance and never expire.
 #
-# Keep this table and `creditPackages` in the dashboard's SettingsModal.tsx in
-# step: the server prices every order from here (no amount is accepted from the
-# browser), so a divergence is charged silently rather than rejected.
-#
-# The curve still declines with volume: $0.100/credit at the smallest pack down
-# to $0.055 at the largest.
+# Keep this table, `creditPackages` in the dashboard's SettingsModal.tsx and
+# CreditPurchaseTab.tsx, and CREDIT_PACK_DEFINITIONS in the marketing site's
+# src/lib/pricing.ts in step: the server prices every order from here (no
+# amount is accepted from the browser), so a divergence is charged silently
+# rather than rejected.
 CREDIT_PACKS_USD: Dict[int, int] = {
-    50: 5,        # $0.100/credit
-    100: 9,       # $0.090/credit
-    250: 20,      # $0.080/credit
-    500: 38,      # $0.076/credit
-    1000: 70,     # $0.070/credit
-    2500: 165,    # $0.066/credit
-    5000: 300,    # $0.060/credit
-    10000: 550,   # $0.055/credit
+    1000: 15,     # $0.0150/credit, 70.0% margin
+    1700: 25,     # $0.0147/credit, 69.4%
+    3500: 50,     # $0.0143/credit, 68.5%
+    7200: 100,    # $0.0139/credit, 67.6%
+    11000: 150,   # $0.0136/credit, 67.0%
+    18500: 250,   # $0.0135/credit, 66.7%
+    37500: 500,   # $0.0133/credit, 66.2%
+    76000: 1000,  # $0.0132/credit, 65.8%
 }
 
 # Legacy/alternate ids the frontend has used for the same products.

@@ -80,7 +80,7 @@ def test_per_user_limit_allows_multiple_when_raised():
 
 def test_product_prefix_match():
     row = _promo(products=["credits_"])
-    assert promo.evaluate(row, "credits_500", 38.0, FRESH, NOW) > 0
+    assert promo.evaluate(row, "credits_3500", 50.0, FRESH, NOW) > 0
     with pytest.raises(promo.PromoError):
         promo.evaluate(row, "operational", 39.0, FRESH, NOW)
 
@@ -99,12 +99,12 @@ def test_resolve_charge_applies_discount():
 
 def test_resolve_charge_enforces_gateway_floor():
     with pytest.raises(pricing.UnknownProduct):
-        pricing.resolve_charge("credits_50", 4.99)  # $0.01 -> Rp 160
+        pricing.resolve_charge("credits_1000", 14.99)  # $0.01 -> Rp 160
 
 
 def test_resolve_charge_rejects_a_free_order():
     with pytest.raises(pricing.UnknownProduct):
-        pricing.resolve_charge("credits_50", 5.0)
+        pricing.resolve_charge("credits_1000", 15.0)
 
 
 def test_generated_codes_are_valid_and_unambiguous():
@@ -186,5 +186,5 @@ def test_affiliate_key_keeps_different_affiliates_apart():
 
 
 def test_a_full_discount_is_free_only_when_allowed():
-    assert pricing.resolve_charge("credits_50", 5.0, allow_free=True) == (0.0, 0)
+    assert pricing.resolve_charge("credits_1000", 15.0, allow_free=True) == (0.0, 0)
     assert promo.compute_discount_usd(20.0, "percent", 100) == 20.0
