@@ -99,7 +99,7 @@ class Settings(BaseSettings):
 
 
     # n8n Integration configuration
-    n8n_base_url: str = "http://avry-n8n:5678"
+    n8n_base_url: str = "http://n8n:5678"
     n8n_timeout: float = 10.0
     n8n_max_retries: int = 3
     
