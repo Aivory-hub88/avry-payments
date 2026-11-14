@@ -18,3 +18,9 @@ def test_unknown_or_unactivated_names_are_dropped():
 
 def test_default_offers_cards_wallets_qris_and_vas():
     assert set(G.DEFAULT_SNAP_CHANNELS) >= {"credit_card", "gopay", "qris", "bni_va", "echannel", "bsi_va"}
+
+
+def test_google_pay_is_a_snap_channel_with_aliases():
+    assert G.normalise_channels(["google_pay"]) == ["google_pay"]
+    assert G.normalise_channels(["Google Pay", "gpay"]) == ["google_pay"]
+    assert "google_pay" in G.DEFAULT_SNAP_CHANNELS
