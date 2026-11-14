@@ -167,6 +167,10 @@ class MidtransPaymentService:
     SUPPORTED_SNAP_CHANNELS = frozenset(
         {
             "credit_card", "gopay", "dana", "qris", "other_qris", "shopeepay",
+            # Google Pay: Midtrans serves it through Snap only (no Core API
+            # payment_type without embedding Google's own button) and needs
+            # credit_card.secure = true, which every transaction already sets.
+            "google_pay",
             # Virtual accounts and Mandiri bill payment. Checked 2026-10-19 by
             # creating a Snap token naming each and reading back what Snap
             # rendered: these are shown; bca_va, shopeepay and dana are not
@@ -189,6 +193,8 @@ class MidtransPaymentService:
     # label and fold it into the channel that actually processes it rather than
     # dropping it as unsupported (which would silently widen the Snap list).
     CHANNEL_ALIASES = {
+        "gpay": "google_pay",
+        "googlepay": "google_pay",
         "debit_card": "credit_card",
         "debitcard": "credit_card",
         "debit": "credit_card",
@@ -213,7 +219,7 @@ class MidtransPaymentService:
     # Bank transfer / VA is offered again (2026-10-19): the merchant account
     # has the VAs activated, and until Core API is activated Snap is the only
     # way to take any payment, so it should show every method we can collect.
-    DEFAULT_SNAP_CHANNELS = ("credit_card", "gopay", "qris", "shopeepay") + VA_SNAP_CHANNELS
+    DEFAULT_SNAP_CHANNELS = ("credit_card", "google_pay", "gopay", "qris", "shopeepay") + VA_SNAP_CHANNELS
 
     @classmethod
     def normalise_channels(cls, channels: Optional[List[str]]) -> List[str]:
