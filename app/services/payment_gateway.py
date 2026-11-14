@@ -384,6 +384,13 @@ class MidtransPaymentService:
         "qris": {"payment_type": "qris", "extra": {"qris": {"acquirer": "gopay"}}},
         "shopeepay": {"payment_type": "shopeepay", "needs_callback_url": True},
         "credit_card": {"payment_type": "credit_card", "needs_card_token": True},
+        # Google Pay is a card charge whose token comes from Google's own
+        # button (gateway "midtrans") instead of Midtrans' card-token JS.
+        "google_pay": {
+            "payment_type": "credit_card",
+            "needs_google_pay_token": True,
+            "host": "pay",
+        },
         "bank_transfer": {"payment_type": "bank_transfer", "needs_bank": True},
         # Mandiri has no VA here: it is a bill payment (biller code + bill key).
         "echannel": {"payment_type": "echannel", "needs_bill_info": True},
@@ -429,6 +436,7 @@ class MidtransPaymentService:
         bank: Optional[str] = None,
         callback_url: Optional[str] = None,
         discount_usd: float = 0.0,
+        google_pay_token: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Charge via Core API so the checkout UI stays ours.
@@ -470,6 +478,11 @@ class MidtransPaymentService:
             # exchanges them with Midtrans for a token first.
             return {"success": False, "error": "Card token is required"}
 
+        if spec.get("needs_google_pay_token") and not (
+            isinstance(google_pay_token, dict) and google_pay_token.get("signedMessage")
+        ):
+            return {"success": False, "error": "Google Pay token is required"}
+
         order_id = generate_id(f"payment_{pricing.canonical_product(product)}")
         amount_usd, amount_idr = pricing.resolve_charge(product, discount_usd)
 
@@ -490,6 +503,11 @@ class MidtransPaymentService:
 
         if spec.get("needs_card_token"):
             payload["credit_card"] = {"token_id": card_token_id, "authentication": True}
+        if spec.get("needs_google_pay_token"):
+            payload["credit_card"] = {
+                "google_pay_token": google_pay_token,
+                "authentication": True,
+            }
         if spec.get("needs_bank"):
             payload["bank_transfer"] = {"bank": bank}
         if spec.get("needs_bill_info"):
@@ -519,7 +537,7 @@ class MidtransPaymentService:
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.api_url}/v2/charge",
+                    f"{self.pay_api_url if spec.get('host') == 'pay' else self.api_url}/v2/charge",
                     json=payload,
                     headers=self._get_headers(),
                 )
@@ -885,6 +903,31 @@ class MidtransPaymentService:
     # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
+
+    @property
+    def pay_api_url(self) -> str:
+        """Host Midtrans documents for Google Pay charges and JWTs."""
+        return "https://panapi.midtrans.com" if self.is_production else "https://panapi.sandbox.midtrans.com"
+
+    async def create_google_pay_jwt(self, merchant_origin: str) -> Optional[str]:
+        """
+        Exchange the checkout's origin for the authJwt Google Pay's button
+        needs (Midtrans' partner flow, so no per-domain registration with
+        Google). The sandbox does not need one.
+        """
+        if not self.is_production:
+            return None
+        import base64
+
+        basic = base64.b64encode(f"{self.client_key}:".encode()).decode()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"{self.pay_api_url}/google_auth",
+                json={"merchantOrigin": merchant_origin},
+                headers={"Authorization": f"Basic {basic}", "Accept": "application/json"},
+            )
+            response.raise_for_status()
+            return response.json().get("authJwt")
 
     def get_client_key(self) -> Optional[str]:
         """The Snap client key, safe to expose to the browser."""

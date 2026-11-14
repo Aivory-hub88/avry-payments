@@ -15,6 +15,7 @@ Authorisation rules
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -243,6 +244,10 @@ class ChargeRequest(BaseModel):
     # account, so a VA must name one of CORE_API_VA_BANKS. "mandiri" is served
     # as a Mandiri bill payment (echannel).
     bank: Optional[str] = Field(None, description="Bank for a bank_transfer VA")
+    google_pay_token: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Token object from Google's PaymentData. Required for google_pay.",
+    )
     promo_code: Optional[str] = Field(
         None, description="Promo code; the discount is derived server-side"
     )
@@ -530,6 +535,7 @@ async def charge_midtrans(
         card_token_id=request.card_token_id,
         bank=request.bank,
         discount_usd=discount_usd,
+        google_pay_token=request.google_pay_token,
     )
 
     if result.get("success"):
@@ -1005,6 +1011,31 @@ async def record_payment(
         "user_id": user_id,
         "amount": amount,
         "product": product,
+    }
+
+
+_GOOGLE_PAY_ORIGINS = re.compile(r"^(?:[a-z0-9-]+\.)*aivory\.(?:uk|id)$")
+
+
+@router.get("/google-pay/jwt")
+async def get_google_pay_jwt(origin: str):
+    """
+    authJwt for the Google Pay button, issued by Midtrans for this checkout's
+    origin. Only Aivory's own hosts are accepted.
+    """
+    host = origin.lower().replace("https://", "").split("/")[0]
+    if not _GOOGLE_PAY_ORIGINS.match(host):
+        raise HTTPException(status_code=400, detail="Unsupported origin")
+    try:
+        jwt = await midtrans_service.create_google_pay_jwt(host)
+    except Exception as e:
+        logger.error("Google Pay JWT failed: %s", e)
+        raise HTTPException(status_code=502, detail="Could not get a Google Pay token")
+    return {
+        "success": True,
+        "auth_jwt": jwt,
+        "is_production": midtrans_service.is_production,
+        "gateway_merchant_id": "BCR2DN4T2PNOHCSD",
     }
 
 
